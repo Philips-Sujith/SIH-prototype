@@ -94,7 +94,10 @@ app.add_middleware(
 DISTRICTS_CACHE: Dict[str, Any] = {
     "timestamp": 0.0,
     "data": [],
-    "states": {}
+    "states": {},
+    "last_refresh_failed": False,
+    "last_failure_timestamp": 0.0,
+    "last_failure_detail": "",
 }
 FORECAST_CACHE: Dict[str, Dict[str, Any]] = {}
 SPATIAL_CACHE: Dict[str, Any] = {
@@ -102,6 +105,30 @@ SPATIAL_CACHE: Dict[str, Any] = {
     "data": None
 }
 CACHE_TTL_SECONDS = 600  # 10 minutes cache
+UPSTREAM_FAILURE_COOLDOWN_SECONDS = 30
+DISTRICTS_FETCH_LOCK = asyncio.Lock()
+
+
+def get_valid_cached_districts(expected_ids: Optional[set[str]] = None) -> Optional[List[Dict[str, Any]]]:
+    """Return cached district data only when it is a complete calculated payload."""
+    cached_data = DISTRICTS_CACHE.get("data")
+    if not isinstance(cached_data, list) or len(cached_data) != 83:
+        return None
+
+    required_fields = {
+        "id", "district", "state", "temp", "rh", "wind",
+        "hi", "wbgt", "utci", "updated_at",
+    }
+    if any(
+        not isinstance(record, dict) or not required_fields.issubset(record)
+        for record in cached_data
+    ):
+        return None
+
+    if expected_ids is not None and {record["id"] for record in cached_data} != expected_ids:
+        return None
+
+    return cached_data
 
 
 def load_districts() -> List[Dict[str, Any]]:
@@ -214,15 +241,50 @@ async def health_check():
 
 
 async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Return district data with single-flight protection around cache population."""
+    request_started_at = time.time()
+    if not force_refresh:
+        cached_data = get_valid_cached_districts()
+        if cached_data and request_started_at - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS:
+            return cached_data
+
+    async with DISTRICTS_FETCH_LOCK:
+        cached_data = get_valid_cached_districts()
+        cache_is_fresh = cached_data and time.time() - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS
+        if cache_is_fresh and (not force_refresh or DISTRICTS_CACHE["timestamp"] > request_started_at):
+            return cached_data
+
+        failure_age = time.time() - DISTRICTS_CACHE["last_failure_timestamp"]
+        if failure_age < UPSTREAM_FAILURE_COOLDOWN_SECONDS:
+            if cached_data:
+                DISTRICTS_CACHE["last_refresh_failed"] = True
+                logger.warning("Returning stale cached district data during Open-Meteo failure cooldown.")
+                return cached_data
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=DISTRICTS_CACHE["last_failure_detail"] or "Live weather data is temporarily unavailable from Open-Meteo."
+            )
+
+        DISTRICTS_CACHE["last_refresh_failed"] = False
+        try:
+            districts = await _fetch_and_compute_districts_locked(force_refresh=force_refresh)
+            DISTRICTS_CACHE["last_failure_timestamp"] = 0.0
+            DISTRICTS_CACHE["last_failure_detail"] = ""
+            return districts
+        except Exception as exc:
+            if not get_valid_cached_districts():
+                DISTRICTS_CACHE["last_failure_timestamp"] = time.time()
+                DISTRICTS_CACHE["last_failure_detail"] = str(exc)
+            raise
+
+
+async def _fetch_and_compute_districts_locked(force_refresh: bool = False) -> List[Dict[str, Any]]:
     """
     Batched fetch of live weather for all 83 representative district coordinates
     via Open-Meteo, followed by exact Rothfusz HI, BOM WBGT, Heat Stress Score, and risk calculation.
     """
-    now = time.time()
-    if not force_refresh and DISTRICTS_CACHE["data"] and (now - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS):
-        return DISTRICTS_CACHE["data"]
-
     districts = load_districts()
+    expected_ids = {district["id"] for district in districts}
     lats = ",".join(str(d["lat"]) for d in districts)
     lons = ",".join(str(d["lon"]) for d in districts)
 
@@ -237,6 +299,7 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
     weather_data = None
     last_error: Optional[Exception] = None
     retryable_statuses = {429, 500, 502, 503, 504}
+    rate_limit_retry_used = False
 
     for attempt in range(3):
         try:
@@ -252,6 +315,15 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
             last_error = exc
             if exc.response.status_code not in retryable_statuses or attempt == 2:
                 break
+            if exc.response.status_code == 429:
+                cached_data = get_valid_cached_districts(expected_ids)
+                if cached_data:
+                    DISTRICTS_CACHE["last_refresh_failed"] = True
+                    logger.warning("Returning stale cached district data because Open-Meteo returned HTTP 429.")
+                    return cached_data
+                if rate_limit_retry_used:
+                    break
+                rate_limit_retry_used = True
             retry_after = exc.response.headers.get("Retry-After")
             try:
                 delay = min(10.0, max(1.0, float(retry_after))) if retry_after else 2.0 ** attempt
@@ -267,9 +339,11 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
     if weather_data is None:
         exc = last_error or RuntimeError("Open-Meteo returned no weather data")
         logger.error(f"Error fetching Open-Meteo batched data: {exc}")
-        if DISTRICTS_CACHE["data"]:
+        cached_data = get_valid_cached_districts(expected_ids)
+        if cached_data:
             logger.warning("Returning stale cached district data due to network error.")
-            return DISTRICTS_CACHE["data"]
+            DISTRICTS_CACHE["last_refresh_failed"] = True
+            return cached_data
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Unable to retrieve live weather data from Open-Meteo after retries: {exc}"
@@ -278,8 +352,9 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
     if isinstance(weather_data, dict):
         weather_data = [weather_data]
     if not isinstance(weather_data, list) or len(weather_data) != len(districts):
-        cached_data = DISTRICTS_CACHE["data"]
-        if isinstance(cached_data, list) and len(cached_data) == len(districts):
+        cached_data = get_valid_cached_districts(expected_ids)
+        if cached_data:
+            DISTRICTS_CACHE["last_refresh_failed"] = True
             logger.warning("Returning stale cached district data because Open-Meteo returned an incomplete response.")
             return cached_data
         raise HTTPException(
@@ -296,8 +371,9 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
     for index, weather_record in enumerate(weather_data):
         current = weather_record.get("current") if isinstance(weather_record, dict) else None
         if not isinstance(current, dict) or any(current.get(field) is None for field in required_fields):
-            cached_data = DISTRICTS_CACHE["data"]
-            if isinstance(cached_data, list) and len(cached_data) == len(districts):
+            cached_data = get_valid_cached_districts(expected_ids)
+            if cached_data:
+                DISTRICTS_CACHE["last_refresh_failed"] = True
                 logger.warning("Returning stale cached district data because Open-Meteo returned incomplete district weather data.")
                 return cached_data
             raise HTTPException(
@@ -399,7 +475,26 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
         }
         computed_districts.append(d_record)
 
-    DISTRICTS_CACHE["timestamp"] = now
+    calculated_fields = {
+        "id", "district", "state", "temp", "rh", "wind",
+        "hi", "wbgt", "utci", "updated_at",
+    }
+    if (
+        len(computed_districts) != len(districts)
+        or {record.get("id") for record in computed_districts} != expected_ids
+        or any(not calculated_fields.issubset(record) for record in computed_districts)
+    ):
+        cached_data = get_valid_cached_districts(expected_ids)
+        if cached_data:
+            DISTRICTS_CACHE["last_refresh_failed"] = True
+            logger.warning("Returning stale cached district data because calculated district data was incomplete.")
+            return cached_data
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Open-Meteo district data could not be converted into a complete district response."
+        )
+
+    DISTRICTS_CACHE["timestamp"] = time.time()
     DISTRICTS_CACHE["data"] = computed_districts
     DISTRICTS_CACHE["states"] = {
         "Tamil Nadu": len([d for d in computed_districts if d["state"] == "Tamil Nadu"]),
@@ -418,15 +513,17 @@ async def get_districts(refresh: bool = False):
     cached for 10 minutes in memory. Pass ?refresh=true for manual on-demand refresh.
     """
     now = time.time()
-    was_cached = not refresh and DISTRICTS_CACHE["data"] and (now - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS)
+    cached_data = get_valid_cached_districts()
+    was_cached = not refresh and cached_data and (now - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS)
     
-    refresh_failed = False
+    refresh_failed = bool(refresh and DISTRICTS_CACHE.get("last_refresh_failed", False))
     try:
         districts = await fetch_and_compute_districts(force_refresh=refresh)
     except Exception as exc:
         logger.warning(f"Refresh failed, returning last known data: {exc}")
-        if DISTRICTS_CACHE["data"]:
-            districts = DISTRICTS_CACHE["data"]
+        cached_data = get_valid_cached_districts()
+        if cached_data:
+            districts = cached_data
             refresh_failed = True
         else:
             raise
