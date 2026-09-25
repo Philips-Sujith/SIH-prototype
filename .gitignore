@@ -1,7 +1,10 @@
 # Secrets and Environment Variables
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 backend/.env
 frontend/.env
 *.env
