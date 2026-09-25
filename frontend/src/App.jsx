@@ -6,7 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ThemeProvider } from './context/ThemeContext';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || (import.meta.env.PROD ? 'https://climateguard-api-a9z8.onrender.com' : 'http://localhost:8000');
 
 function AppContent() {
   const [zones, setZones] = useState([]);
