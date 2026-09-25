@@ -8,9 +8,16 @@ import json
 import logging
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
+from dotenv import load_dotenv
 
 logger = logging.getLogger("climateguard.telegram")
+
+# Ensure .env is loaded if called standalone or directly
+_BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(_BASE_DIR / ".env")
+load_dotenv(_BASE_DIR.parent / ".env")
 
 
 def get_telegram_credentials() -> Tuple[str, str]:
@@ -99,3 +106,66 @@ def send_telegram_alert(message_text: str, chat_id: Optional[str] = None) -> Dic
         err_msg = f"Unexpected failure dispatching Telegram alert: {str(exc)}"
         logger.exception(err_msg)
         return {"sent": False, "error": err_msg, "channel": target_channel}
+
+
+def send_telegram_document(
+    document_bytes: bytes,
+    filename: str,
+    caption: str = "",
+    chat_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Send an official document/PDF to the Telegram Officials supergroup or specified chat.
+    Uses TELEGRAM_OFFICIALS_CHAT_ID by default, falling back to chat_id argument.
+    """
+    token, _ = get_telegram_credentials()
+    officials_chat = os.getenv("TELEGRAM_OFFICIALS_CHAT_ID", "").strip()
+    target_chat = (chat_id or officials_chat).strip()
+
+    if not token:
+        err_msg = "Telegram Bot Token (TELEGRAM_BOT_TOKEN) is not configured in environment variables."
+        logger.error(err_msg)
+        return {"sent": False, "error": err_msg, "channel": target_chat or "Unconfigured"}
+
+    if not target_chat:
+        err_msg = "Telegram Officials Chat ID (TELEGRAM_OFFICIALS_CHAT_ID) is not configured in environment variables."
+        logger.error(err_msg)
+        return {"sent": False, "error": err_msg, "channel": "Unconfigured"}
+
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+
+    try:
+        import httpx
+        files = {
+            "document": (filename, document_bytes, "application/pdf")
+        }
+        data = {
+            "chat_id": target_chat,
+            "caption": caption
+        }
+        with httpx.Client(timeout=25.0) as client:
+            resp = client.post(url, data=data, files=files)
+            res_json = resp.json()
+
+        if res_json.get("ok"):
+            result_data = res_json.get("result", {})
+            msg_id = result_data.get("message_id")
+            logger.info(f"Official report PDF successfully dispatched to {target_chat} (message_id: {msg_id})")
+            return {
+                "sent": True,
+                "channel": target_chat,
+                "message_id": msg_id,
+                "filename": filename,
+                "caption": caption,
+                "raw": result_data
+            }
+        else:
+            description = res_json.get("description", "Unknown Telegram API rejection")
+            err_msg = f"Telegram rejected document: {description}"
+            logger.error(err_msg)
+            return {"sent": False, "error": err_msg, "channel": target_chat}
+    except Exception as exc:
+        err_msg = f"Failure dispatching Telegram document: {str(exc)}"
+        logger.exception(err_msg)
+        return {"sent": False, "error": err_msg, "channel": target_chat}
+

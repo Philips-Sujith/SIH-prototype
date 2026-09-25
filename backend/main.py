@@ -9,7 +9,7 @@ import json
 import time
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -39,7 +39,8 @@ from mortality import (
     MortalityRecord
 )
 from alert_templates import format_multilingual_alert
-from telegram_service import send_telegram_alert
+from telegram_service import send_telegram_alert, send_telegram_document
+from report_generator import generate_official_pdf_report
 
 # Setup logging
 logging.basicConfig(
@@ -48,17 +49,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("climateguard")
 
-# Load environment variables
-load_dotenv()
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "microsoft/Phi-3-mini-4k-instruct").strip()
-
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DISTRICTS_FILE = DATA_DIR / "south_india_districts.json"
 LEGACY_DISTRICTS_FILE = DATA_DIR / "districts.json"
 ALERT_LOG_FILE = BASE_DIR / "alerts.log"
+
+# Load environment variables (from backend/.env or root .env)
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "microsoft/Phi-3-mini-4k-instruct").strip()
 
 app = FastAPI(
     title="ClimateGuard India API",
@@ -92,6 +94,7 @@ app.add_middleware(
 
 AUTHENTIC_SEED_FILE = DATA_DIR / "authentic_weather_seed.json"
 LATEST_CACHE_FILE = DATA_DIR / "weather_cache_latest.json"
+AUTHENTIC_FORECAST_SEED_FILE = DATA_DIR / "authentic_forecast_seed.json"
 
 # In-memory caches (dict with timestamp)
 DISTRICTS_CACHE: Dict[str, Any] = {
@@ -153,6 +156,28 @@ def load_authentic_weather_seed() -> bool:
         return False
 
 
+def load_authentic_forecast_seed() -> bool:
+    """Load authentic 83-district 7-day multi-variable forecast dataset on cold start."""
+    if not AUTHENTIC_FORECAST_SEED_FILE.exists():
+        logger.warning(f"No forecast seed file found at {AUTHENTIC_FORECAST_SEED_FILE}")
+        return False
+    try:
+        with open(AUTHENTIC_FORECAST_SEED_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        districts_forecast = payload.get("districts", {})
+        now = time.time()
+        for d_id, fc_item in districts_forecast.items():
+            FORECAST_CACHE[d_id.lower()] = {
+                "timestamp": now,
+                "data": fc_item
+            }
+        logger.info(f"Loaded authentic 7-day forecasts for {len(districts_forecast)} districts into FORECAST_CACHE.")
+        return True
+    except Exception as exc:
+        logger.error(f"Error loading authentic forecast seed: {exc}")
+        return False
+
+
 def get_valid_cached_districts(expected_ids: Optional[set[str]] = None) -> Optional[List[Dict[str, Any]]]:
     """Return cached district data only when it is a complete calculated payload."""
     cached_data = DISTRICTS_CACHE.get("data")
@@ -206,6 +231,8 @@ def validate_startup_districts():
 
     # Immediately populate authentic weather seed on cold start
     load_authentic_weather_seed()
+    # Immediately populate authentic forecast seed on cold start
+    load_authentic_forecast_seed()
 
     # Initialize and validate synthetic mortality dataset
     try:
@@ -608,15 +635,18 @@ async def get_zones_alias():
 async def get_district_forecast(district_id: str):
     """
     Returns Open-Meteo multi-day forecast for the specific district,
-    computed with Rothfusz Heat Index, Australian BOM WBGT, and risk categories.
+    computed with Rothfusz Heat Index, Australian BOM WBGT, UTCI, and risk categories.
+    Cache-first with authentic seed fallback; resilient to upstream 429 rate limits.
     """
     now = time.time()
     d_id_clean = district_id.strip().lower()
 
-    if d_id_clean in FORECAST_CACHE:
-        cached_entry = FORECAST_CACHE[d_id_clean]
-        if now - cached_entry["timestamp"] < CACHE_TTL_SECONDS:
-            return cached_entry["data"]
+    if d_id_clean not in FORECAST_CACHE:
+        load_authentic_forecast_seed()
+
+    cached_entry = FORECAST_CACHE.get(d_id_clean)
+    if cached_entry and (now - cached_entry["timestamp"] < FRESH_CACHE_TTL_SECONDS):
+        return cached_entry["data"]
 
     districts = load_districts()
     district = next((d for d in districts if d["id"] == d_id_clean), None)
@@ -634,16 +664,30 @@ async def get_district_forecast(district_id: str):
         f"&timezone=Asia%2FKolkata"
     )
 
+    data = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+            resp = await client.get(
+                url,
+                headers={"User-Agent": "ClimateGuard-India/2.0 (early-warning-platform)"}
+            )
+            if resp.status_code == 429:
+                logger.warning(f"Open-Meteo returned 429 for forecast {district_id}. Using cached authentic forecast.")
+            else:
+                resp.raise_for_status()
+                data = resp.json()
     except Exception as exc:
-        logger.error(f"Error fetching forecast for {district_id}: {exc}")
+        logger.warning(f"Error refreshing live forecast for {district_id}: {exc}")
+
+    if not data or not isinstance(data.get("daily"), dict):
+        if cached_entry:
+            cached_entry["timestamp"] = now - FRESH_CACHE_TTL_SECONDS + 300
+            return cached_entry["data"]
+        if load_authentic_forecast_seed() and d_id_clean in FORECAST_CACHE:
+            return FORECAST_CACHE[d_id_clean]["data"]
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Unable to retrieve forecast data: {str(exc)}"
+            detail="Unable to retrieve forecast data: upstream rate-limited or unavailable"
         )
 
     daily = data.get("daily", {})
@@ -660,7 +704,6 @@ async def get_district_forecast(district_id: str):
         w_val = float(w) if w is not None else 3.0
         s_val = float(solars[i]) if (i < len(solars) and solars[i] is not None) else 0.0
 
-        # Estimate midday peak solar irradiance (W/m²) from daily sum
         peak_solar_wm2 = max(0.0, min(1000.0, (s_val * 1e6 / (8.0 * 3600.0)) * 0.7)) if s_val > 0 else 600.0
         hi = calculate_heat_index(t_val, r_val)
         wbgt = calculate_wbgt(t_val, r_val, w_val, peak_solar_wm2)
@@ -674,9 +717,14 @@ async def get_district_forecast(district_id: str):
         days_forecast.append({
             "date": d,
             "temp_max": round(t_val, 1),
+            "temp": round(t_val, 1),
+            "temperature": round(t_val, 1),
             "rh_max": round(r_val, 1),
+            "humidity": round(r_val, 1),
             "wind_max": round(w_val, 1),
+            "wind_speed": round(w_val, 1),
             "hi": hi,
+            "heat_index": hi,
             "wbgt": wbgt,
             "utci": utci_forecast,
             "utci_category": utci_cat_forecast["category"],
@@ -694,7 +742,9 @@ async def get_district_forecast(district_id: str):
         "state": district["state"],
         "elderly_pct": district["elderly_pct"],
         "outdoor_worker_pct": district["outdoor_worker_pct"],
-        "forecast": days_forecast
+        "forecast": days_forecast,
+        "cached_at": datetime.utcnow().isoformat() + "Z",
+        "weather_source": "Open-Meteo"
     }
 
     FORECAST_CACHE[d_id_clean] = {
@@ -1500,4 +1550,111 @@ async def send_multilingual_telegram_alert(payload: AlertRequest):
             "hi": alert_info["hindi"]
         }
     }
+
+
+class ReportRequest(BaseModel):
+    district_id: Optional[str] = "chennai"
+    zone_id: Optional[str] = None
+    officer_name: Optional[str] = "Duty Officer"
+    checklist: Optional[List[Dict[str, Any]]] = None
+
+
+@app.post("/api/report")
+async def generate_and_send_official_report(payload: ReportRequest):
+    """
+    Generate an official municipal PDF report and dispatch it to the Telegram Officials supergroup.
+    Returns sent status, timestamp, and metadata.
+    """
+    target_id = (payload.district_id or payload.zone_id or "chennai").strip().lower()
+    districts = load_districts()
+    district = next((d for d in districts if d["id"] == target_id), None)
+    if not district:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"District '{target_id}' not found."
+        )
+
+    # 1. Obtain current conditions for district from authentic cache
+    live_districts = await fetch_and_compute_districts()
+    curr_data = next((d for d in live_districts if d["id"] == target_id), None)
+    if not curr_data:
+        curr_data = district
+
+    # 2. Obtain 7-day forecast
+    fc_res = await get_district_forecast(target_id)
+    forecast_list = fc_res.get("forecast", [])
+
+    # 3. Obtain historical mortality analogue context
+    mortality_analogue = None
+    try:
+        wbgt_val = curr_data.get("wbgt", 30.0)
+        temp_val = curr_data.get("temp", 33.0)
+        rh_val = curr_data.get("rh", 55.0)
+        analogue_res = HistoricalAnalogueService.find_analogues(
+            state=curr_data.get("state", district.get("state", "Tamil Nadu")),
+            wbgt=wbgt_val,
+            temp=temp_val,
+            humidity=rh_val,
+            top_n=5
+        )
+        mortality_analogue = analogue_res
+    except Exception as exc:
+        logger.warning(f"Could not compute historical analogue for report: {exc}")
+
+    # 4. Generate the official PDF bytes
+    officer = (payload.officer_name or "Duty Officer").strip()
+    pdf_bytes = generate_official_pdf_report(
+        district_data=curr_data,
+        forecast_data=forecast_list,
+        mortality_analogue=mortality_analogue,
+        checklist=payload.checklist,
+        officer_name=officer
+    )
+
+    # 5. Dispatch via Telegram sendDocument to TELEGRAM_OFFICIALS_CHAT_ID
+    now_dt = datetime.now(timezone.utc)
+    date_str = now_dt.strftime("%d %b %Y")
+    clean_dist_name = curr_data.get("name", "District").replace(" ", "_")
+    filename = f"ClimateGuard_Report_{clean_dist_name}_{now_dt.strftime('%Y%m%d')}.pdf"
+    caption = f"ClimateGuard India — Official Heat Risk Report: {curr_data.get('name')} ({curr_data.get('state')}) — {date_str}"
+
+    telegram_res = send_telegram_document(
+        document_bytes=pdf_bytes,
+        filename=filename,
+        caption=caption
+    )
+
+    now_iso = now_dt.isoformat()
+    if telegram_res.get("sent"):
+        logger.info(f"[{now_iso}] OFFICIAL REPORT DISPATCHED | District: {curr_data.get('name')} | MsgID: {telegram_res.get('message_id')}")
+    else:
+        logger.warning(f"[{now_iso}] OFFICIAL REPORT DISPATCH FAILED | Error: {telegram_res.get('error')}")
+
+    # Append to alert log file
+    try:
+        log_entry = (
+            f"[{now_iso}] TYPE: OFFICIAL_REPORT | DISTRICT: {curr_data.get('name')} | "
+            f"SENT: {telegram_res.get('sent', False)} | CHAT: {telegram_res.get('channel')} | "
+            f"MSG_ID: {telegram_res.get('message_id')} | OFFICER: {officer} | FILE: {filename}"
+        )
+        with open(ALERT_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(log_entry + "\n")
+    except Exception as exc:
+        logger.warning(f"Failed to append report entry to alerts.log: {exc}")
+
+    return {
+        "sent": telegram_res.get("sent", False),
+        "status": "success" if telegram_res.get("sent") else "failed",
+        "type": "official_report",
+        "district": curr_data.get("name"),
+        "state": curr_data.get("state"),
+        "officials_chat_id": telegram_res.get("channel"),
+        "message_id": telegram_res.get("message_id"),
+        "filename": filename,
+        "caption": caption,
+        "officer": officer,
+        "error": telegram_res.get("error"),
+        "timestamp": now_iso
+    }
+
 

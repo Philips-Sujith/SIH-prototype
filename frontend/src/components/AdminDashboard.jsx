@@ -25,7 +25,7 @@ import {
   Radio,
   Database,
   ThermometerSun,
-  ShieldCheck
+  FileText
 } from 'lucide-react';
 import IndiaHeatMap from './IndiaHeatMap';
 import { useTheme } from '../context/ThemeContext';
@@ -80,6 +80,33 @@ const ALERT_TEST_PROFILES = {
   }
 };
 
+const INITIAL_CHECKLIST = [
+  {
+    id: 'cooling_centres',
+    label: 'Open municipal cooling centres and shaded water hydration points',
+    sub: 'Priority: Public transit hubs, primary health centres, and markets',
+    checked: false,
+    checkedAt: null,
+    checkedBy: null
+  },
+  {
+    id: 'shift_work_hours',
+    label: 'Enforce mandatory work stoppage for outdoor labor (12:00 PM – 4:00 PM)',
+    sub: 'Covers construction workers, street vendors, delivery personnel, and sanitation staff',
+    checked: false,
+    checkedAt: null,
+    checkedBy: null
+  },
+  {
+    id: 'flag_grid_load',
+    label: 'Flag high power-grid demand for state electricity distribution board',
+    sub: 'Mitigate transformer blowout risk during peak afternoon cooling surge',
+    checked: false,
+    checkedAt: null,
+    checkedBy: null
+  }
+];
+
 export default function AdminDashboard({
   zones,
   selectedZone,
@@ -94,6 +121,7 @@ export default function AdminDashboard({
   const [alertsList, setAlertsList] = useState([]);
   const [alertLogs, setAlertLogs] = useState([]);
   const [isAlerting, setIsAlerting] = useState(false);
+  const [isReporting, setIsReporting] = useState(false);
   const [processingAlertId, setProcessingAlertId] = useState(null);
   // Admin-Only Alert Test Mode ('live' by default, never persistent or applied to public telemetry)
   const [alertTestMode, setAlertTestMode] = useState('live');
@@ -104,15 +132,23 @@ export default function AdminDashboard({
   const [mortalityMeta, setMortalityMeta] = useState(null);
   const [showMethodology, setShowMethodology] = useState(false);
 
-  // Municipal action checklist
-  const [actions, setActions] = useState({
-    coolingCenters: false,
-    shiftWorkHours: false,
-    flagGridLoad: false
-  });
+  // Municipal action checklist with real audit tracking & duty officer designation
+  const [dutyOfficer, setDutyOfficer] = useState('Duty Officer (SDMA Operations)');
+  const [checklistItems, setChecklistItems] = useState(INITIAL_CHECKLIST);
 
-  const toggleAction = (key) => {
-    setActions((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleChecklistItem = (id) => {
+    setChecklistItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const nextChecked = !item.checked;
+        return {
+          ...item,
+          checked: nextChecked,
+          checkedAt: nextChecked ? new Date().toISOString() : null,
+          checkedBy: nextChecked ? (dutyOfficer.trim() || 'Duty Officer') : null
+        };
+      })
+    );
   };
 
   // Filter districts based on state selection
@@ -367,8 +403,74 @@ export default function AdminDashboard({
     }
   };
 
+  // Generate & Dispatch Official Municipal PDF Report to Officials Supergroup
+  const handleGenerateOfficialReport = async () => {
+    if (!selectedZone || isReporting) return;
+    const districtName = selectedZone.district || selectedZone.name;
+
+    const confirmed = window.confirm(
+      `Generate Official Municipal Heat Risk Report (PDF) for ${districtName} (${selectedZone.state}) and deliver directly to the Officials Channel?`
+    );
+    if (!confirmed) return;
+
+    setIsReporting(true);
+
+    try {
+      const response = await fetch(`${apiBase}/api/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          district_id: selectedZone.id,
+          zone_id: selectedZone.id,
+          officer_name: dutyOfficer.trim() || 'Duty Officer',
+          checklist: checklistItems
+        })
+      });
+
+      const result = await response.json();
+      if (response.ok && result.sent) {
+        setAlertLogs((prev) => [result, ...prev]);
+        onShowToast(`Official Report PDF dispatched to Officials Supergroup for ${districtName}!`);
+      } else {
+        const errorDesc = result.error || (result.detail ? (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 'Failed to send official report');
+        const failedEntry = {
+          ...result,
+          sent: false,
+          status: 'failed',
+          type: 'official_report',
+          district_name: districtName,
+          state: selectedZone.state,
+          officer: dutyOfficer.trim() || 'Duty Officer',
+          filename: result.filename || `ClimateGuard_Report_${districtName}.pdf`,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
+          error: errorDesc
+        };
+        setAlertLogs((prev) => [failedEntry, ...prev]);
+        onShowToast(`Official report dispatch failed: ${errorDesc}`);
+      }
+    } catch (err) {
+      console.error("Report dispatch error:", err);
+      const failedEntry = {
+        sent: false,
+        status: 'failed',
+        type: 'official_report',
+        district_name: districtName,
+        state: selectedZone.state,
+        officer: dutyOfficer.trim() || 'Duty Officer',
+        filename: `ClimateGuard_Report_${districtName}.pdf`,
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
+        error: err.message || 'Network connection failed'
+      };
+      setAlertLogs((prev) => [failedEntry, ...prev]);
+      onShowToast(`Report error: ${err.message || 'Network failure'}`);
+    } finally {
+      setIsReporting(false);
+    }
+  };
+
   // Chart configuration
   const chartLabels = forecastData.map((d) => {
+    if (!d || !d.date) return '';
     const parts = d.date.split('-');
     if (parts.length === 3) {
       const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
@@ -382,7 +484,7 @@ export default function AdminDashboard({
     datasets: [
       {
         label: 'WBGT (°C) - Wet-Bulb Globe Temp',
-        data: forecastData.map((d) => d.wbgt),
+        data: forecastData.map((d) => Number(d.wbgt ?? 0)),
         borderColor: isDark ? '#f97316' : '#ea580c',
         backgroundColor: isDark ? 'rgba(249, 115, 22, 0.12)' : 'rgba(234, 88, 12, 0.08)',
         borderWidth: 2.5,
@@ -393,7 +495,7 @@ export default function AdminDashboard({
       },
       {
         label: 'Max Ambient Air Temp (°C)',
-        data: forecastData.map((d) => d.temp_max),
+        data: forecastData.map((d) => Number(d.temp_max ?? d.temp ?? d.temperature ?? 0)),
         borderColor: isDark ? '#38bdf8' : '#0284c7',
         borderWidth: 2,
         borderDash: [4, 4],
@@ -404,7 +506,7 @@ export default function AdminDashboard({
       },
       {
         label: 'UTCI (°C) - Universal Thermal Climate Index',
-        data: forecastData.map((d) => d.utci ?? d.wbgt),
+        data: forecastData.map((d) => Number(d.utci ?? d.wbgt ?? 0)),
         borderColor: isDark ? '#c084fc' : '#7e22ce',
         borderWidth: 2,
         pointBackgroundColor: isDark ? '#c084fc' : '#7e22ce',
@@ -606,22 +708,37 @@ export default function AdminDashboard({
               </div>
             </div>
 
-            <button
-              id="admin-generate-alert-btn"
-              className={`action-btn-primary ${alertTestMode !== 'live' ? 'btn-test-alert' : ''}`}
-              onClick={handleGenerateInstantAlert}
-              disabled={isAlerting}
-              title={alertTestMode !== 'live' ? `Broadcast test ${ALERT_TEST_PROFILES[alertTestMode]?.label || ALERT_TEST_PROFILES[alertTestMode]?.category} alert to Telegram channel` : "Broadcast live multilingual alert to official Telegram channel"}
-            >
-              <Send size={14} />
-              <span>
-                {isAlerting 
-                  ? 'Broadcasting...' 
-                  : alertTestMode !== 'live'
-                    ? `Send Test Alert (${ALERT_TEST_PROFILES[alertTestMode]?.label || ALERT_TEST_PROFILES[alertTestMode]?.category})`
-                    : 'Send Telegram Alert'}
-              </span>
-            </button>
+            <div className="admin-actions-button-row">
+              <button
+                id="admin-generate-alert-btn"
+                className={`action-btn-primary ${alertTestMode !== 'live' ? 'btn-test-alert' : ''}`}
+                onClick={handleGenerateInstantAlert}
+                disabled={isAlerting}
+                title={alertTestMode !== 'live' ? `Broadcast test ${ALERT_TEST_PROFILES[alertTestMode]?.label || ALERT_TEST_PROFILES[alertTestMode]?.category} alert to Telegram channel` : "Broadcast live multilingual alert to official Telegram channel"}
+              >
+                <Send size={14} />
+                <span>
+                  {isAlerting 
+                    ? 'Broadcasting...' 
+                    : alertTestMode !== 'live'
+                      ? `Send Test Alert (${ALERT_TEST_PROFILES[alertTestMode]?.label || ALERT_TEST_PROFILES[alertTestMode]?.category})`
+                      : 'Send Telegram Alert'}
+                </span>
+              </button>
+
+              <button
+                id="admin-send-report-btn"
+                className="action-btn-report"
+                onClick={handleGenerateOfficialReport}
+                disabled={isReporting}
+                title="Generate official municipal PDF heat risk report and dispatch directly to Officials Supergroup"
+              >
+                <FileText size={14} />
+                <span>
+                  {isReporting ? 'Generating Report...' : 'Send Report to Officials'}
+                </span>
+              </button>
+            </div>
 
             {/* Admin-Only Test Mode Visual Indication */}
             {alertTestMode !== 'live' && ALERT_TEST_PROFILES[alertTestMode] && (
@@ -1076,57 +1193,49 @@ export default function AdminDashboard({
               </span>
             </div>
 
+            <div className="checklist-officer-row">
+              <label htmlFor="duty-officer-input" className="checklist-officer-label">
+                Duty Officer / Designation:
+              </label>
+              <input
+                id="duty-officer-input"
+                type="text"
+                className="duty-officer-input"
+                value={dutyOfficer}
+                onChange={(e) => setDutyOfficer(e.target.value)}
+                placeholder="Enter Duty Officer Name & Designation"
+                title="Officer name or designation stamped onto verified municipal actions and official reports"
+              />
+            </div>
+
             <div className="checklist-items">
-              <div
-                className={`checklist-row ${actions.coolingCenters ? 'checked' : ''}`}
-                onClick={() => toggleAction('coolingCenters')}
-              >
-                <div className="custom-checkbox">
-                  {actions.coolingCenters ? (
-                    <CheckSquare size={17} style={{ color: 'var(--risk-low)' }} />
-                  ) : (
-                    <Square size={17} style={{ color: 'var(--text-muted)' }} />
-                  )}
+              {checklistItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`checklist-row ${item.checked ? 'checked' : ''}`}
+                  onClick={() => toggleChecklistItem(item.id)}
+                >
+                  <div className="custom-checkbox">
+                    {item.checked ? (
+                      <CheckSquare size={17} style={{ color: 'var(--risk-low)' }} />
+                    ) : (
+                      <Square size={17} style={{ color: 'var(--text-muted)' }} />
+                    )}
+                  </div>
+                  <div className="checklist-content">
+                    <span className="checklist-text">{item.label}</span>
+                    <span className="checklist-sub">{item.sub}</span>
+                    {item.checked && (
+                      <div className="checklist-audit-trail">
+                        <span className="audit-check-tag">✓ Completed</span>
+                        <span className="audit-meta">
+                          by <strong>{item.checkedBy}</strong> at {new Date(item.checkedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="checklist-content">
-                  <span className="checklist-text">Open municipal cooling centres and shaded water hydration points</span>
-                  <span className="checklist-sub">Priority: Public transit hubs, primary health centres, and markets</span>
-                </div>
-              </div>
-
-              <div
-                className={`checklist-row ${actions.shiftWorkHours ? 'checked' : ''}`}
-                onClick={() => toggleAction('shiftWorkHours')}
-              >
-                <div className="custom-checkbox">
-                  {actions.shiftWorkHours ? (
-                    <CheckSquare size={17} style={{ color: 'var(--risk-low)' }} />
-                  ) : (
-                    <Square size={17} style={{ color: 'var(--text-muted)' }} />
-                  )}
-                </div>
-                <div className="checklist-content">
-                  <span className="checklist-text">Enforce mandatory work stoppage for outdoor labor (12:00 PM – 4:00 PM)</span>
-                  <span className="checklist-sub">Covers construction workers, street vendors, delivery personnel, and sanitation staff</span>
-                </div>
-              </div>
-
-              <div
-                className={`checklist-row ${actions.flagGridLoad ? 'checked' : ''}`}
-                onClick={() => toggleAction('flagGridLoad')}
-              >
-                <div className="custom-checkbox">
-                  {actions.flagGridLoad ? (
-                    <CheckSquare size={17} style={{ color: 'var(--risk-low)' }} />
-                  ) : (
-                    <Square size={17} style={{ color: 'var(--text-muted)' }} />
-                  )}
-                </div>
-                <div className="checklist-content">
-                  <span className="checklist-text">Flag high power-grid demand for state electricity distribution board</span>
-                  <span className="checklist-sub">Mitigate transformer blowout risk during peak afternoon cooling surge</span>
-                </div>
-              </div>
+              ))}
             </div>
           </section>
         </div>
@@ -1221,6 +1330,10 @@ export default function AdminDashboard({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
                   Retrieving multi-day district forecast...
                 </div>
+              ) : forecastData.length === 0 ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+                  Multi-day forecast data currently loading or unavailable.
+                </div>
               ) : (
                 <Line data={chartData} options={chartOptions} />
               )}
@@ -1252,51 +1365,72 @@ export default function AdminDashboard({
                 </span>
               </div>
             ) : (
-              alertLogs.map((log, index) => (
-                <div key={index} className={`alert-log-item ${log.sent === false ? 'alert-log-failed' : ''}`}>
-                  <div className="log-item-header">
-                    <span className="log-district">{log.district_name || log.zone_name} ({log.state})</span>
-                    <span 
-                      className="log-category-pill" 
-                      style={{ 
-                        color: log.thermal_category === 'Severe' ? '#ef4444' : (log.thermal_category === 'Extreme Danger' || log.thermal_category === 'Extreme') ? '#f97316' : '#f59e0b',
-                        borderColor: 'currentColor'
-                      }}
-                    >
-                      {log.thermal_category} (WBGT {log.wbgt}°C)
-                    </span>
-                    {log.is_test_mode && (
-                      <span className="badge-test-dispatch">
-                        TEST DISPATCH
-                      </span>
-                    )}
-                    {log.sent ? (
-                      <span className="badge-telegram-sent">
-                        ● SENT
-                      </span>
-                    ) : (
-                      <span className="badge-telegram-failed">
-                        ✕ SEND FAILED
-                      </span>
-                    )}
-                    <span className="log-timestamp">{log.timestamp}</span>
-                  </div>
-
-                  {log.sent === false && log.error && (
-                    <div className="log-error-banner">
-                      ⚠️ SEND FAILED — {log.error}
+              alertLogs.map((log, index) => {
+                const isReport = log.type === 'official_report';
+                return (
+                  <div key={index} className={`alert-log-item ${log.sent === false ? 'alert-log-failed' : ''} ${isReport ? 'alert-log-report' : ''}`}>
+                    <div className="log-item-header">
+                      <span className="log-district">{log.district_name || log.district || log.zone_name} ({log.state})</span>
+                      {isReport ? (
+                        <span className="log-report-type-badge">
+                          OFFICIAL REPORT (PDF)
+                        </span>
+                      ) : (
+                        <span 
+                          className="log-category-pill" 
+                          style={{ 
+                            color: log.thermal_category === 'Severe' ? '#ef4444' : (log.thermal_category === 'Extreme Danger' || log.thermal_category === 'Extreme') ? '#f97316' : '#f59e0b',
+                            borderColor: 'currentColor'
+                          }}
+                        >
+                          {log.thermal_category} (WBGT {log.wbgt}°C)
+                        </span>
+                      )}
+                      {!isReport && log.is_test_mode && (
+                        <span className="badge-test-dispatch">
+                          TEST DISPATCH
+                        </span>
+                      )}
+                      {log.sent ? (
+                        <span className={isReport ? "badge-report-sent" : "badge-telegram-sent"}>
+                          ● {isReport ? 'REPORT SENT' : 'SENT'}
+                        </span>
+                      ) : (
+                        <span className="badge-telegram-failed">
+                          ✕ {isReport ? 'REPORT FAILED' : 'SEND FAILED'}
+                        </span>
+                      )}
+                      <span className="log-timestamp">{log.timestamp}</span>
                     </div>
-                  )}
 
-                  <pre className="log-message-preview">{log.message}</pre>
+                    {log.sent === false && log.error && (
+                      <div className="log-error-banner">
+                        ⚠️ DISPATCH FAILED — {log.error}
+                      </div>
+                    )}
 
-                  <div className="log-footer">
-                    <span>Channel: {log.channel_id || log.channel || '@Climate_Guard_India_Alerts'}</span>
-                    {log.message_id ? <span>Telegram Msg ID: #{log.message_id}</span> : null}
-                    <span>Languages: English • தமிழ் • हिन्दी</span>
+                    {isReport ? (
+                      <div className="log-report-details">
+                        <div className="log-report-file-row">
+                          <FileText size={13} style={{ color: '#0284c7' }} />
+                          <span>File: <strong>{log.filename}</strong></span>
+                          <span>•</span>
+                          <span>Officer: <strong>{log.officer}</strong></span>
+                        </div>
+                        {log.caption && <div className="log-report-caption">{log.caption}</div>}
+                      </div>
+                    ) : (
+                      <pre className="log-message-preview">{log.message}</pre>
+                    )}
+
+                    <div className="log-footer">
+                      <span>Target: {isReport ? `Officials Supergroup (${log.officials_chat_id || '-1004300598748'})` : (log.channel_id || log.channel || '@Climate_Guard_India_Alerts')}</span>
+                      {log.message_id ? <span>Telegram Msg ID: #{log.message_id}</span> : null}
+                      <span>{isReport ? 'Format: Light Municipal PDF' : 'Languages: English • தமிழ் • हिन्दी'}</span>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </section>

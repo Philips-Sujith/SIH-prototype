@@ -1360,6 +1360,44 @@ select option {
   transform: translateY(0);
 }
 
+.admin-actions-button-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.action-btn-report {
+  background-color: #0284c7;
+  color: #ffffff;
+  border: 1px solid #0369a1;
+  font-weight: 700;
+  font-size: 0.84rem;
+  padding: 9px 18px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.action-btn-report:hover {
+  background-color: #0369a1;
+  box-shadow: 0 2px 10px rgba(2, 132, 199, 0.35);
+  transform: translateY(-1px);
+}
+
+.action-btn-report:active {
+  transform: translateY(0);
+}
+
+.action-btn-report:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Demographic Overlay Row */
 .demographic-metrics-row {
   display: grid;
@@ -1476,6 +1514,107 @@ select option {
   background-color: rgba(255, 255, 255, 0.06);
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.checklist-officer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+}
+
+.checklist-officer-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.duty-officer-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  outline: none;
+  padding: 2px 4px;
+}
+
+.duty-officer-input:focus {
+  border-bottom: 1px solid var(--accent-primary);
+}
+
+.checklist-audit-trail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.audit-check-tag {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.audit-meta {
+  color: var(--text-muted);
+}
+
+/* Official Report Badge & Card in Log */
+.log-report-type-badge {
+  background: rgba(2, 132, 199, 0.15);
+  color: #0284c7;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid rgba(2, 132, 199, 0.3);
+  letter-spacing: 0.03em;
+}
+
+.badge-report-sent {
+  color: #0284c7;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.alert-log-report {
+  border-left: 3px solid #0284c7 !important;
+}
+
+.log-report-details {
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 6px 0;
+}
+
+.log-report-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.log-report-caption {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-style: italic;
 }
 
 /* Alert Log Panel */
