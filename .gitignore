@@ -1,0 +1,56 @@
+# Secrets and Environment Variables
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+*.env
+*.env.local
+*.env.production
+
+# Dependencies
+node_modules/
+*/node_modules/
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache & build
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+*/.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+frontend/dist/
+frontend/dist-ssr/
+
+# Logs
+*.log
+logs/
+backend/alerts.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS and Editor Files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary screenshot captures / debug assets in root
+/*.png
+/mortality_synthetic_daily*.csv
+!backend/data/**
+
