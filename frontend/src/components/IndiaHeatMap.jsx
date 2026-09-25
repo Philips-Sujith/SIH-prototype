@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { MapContainer, TileLayer, GeoJSON, ImageOverlay, Marker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Layers, Flame, SunMedium, Activity, Info } from 'lucide-react';
+import { Layers, Flame, SunMedium, Activity, Info, AlertCircle } from 'lucide-react';
 import { 
   getContinuousColor, 
   generateContinuousThermalRaster 
@@ -143,38 +143,50 @@ export default function IndiaHeatMap({
     return map;
   }, [zones]);
 
+  // Check if real weather telemetry exists for any district
+  const hasTelemetry = useMemo(() => {
+    if (!zones || zones.length === 0) return false;
+    return zones.some((z) => z.wbgt != null && z.temp != null);
+  }, [zones]);
+
   // Task 3: Zoom tier for zoom-responsive crisp raster resolution
   const zoomTier = currentZoom >= 7.5 ? 'deep' : 'standard';
 
   // Task 2b & Task 3: Memoized continuous spatial interpolation raster layer (IDW masked to TN, KL, KA)
+  // When telemetry is unavailable, do NOT generate a thermal raster!
   const rasterUrl = useMemo(() => {
+    if (!hasTelemetry) return null;
     return generateContinuousThermalRaster(districtsGeo, districtMap, activeMetric, zoomTier);
-  }, [districtsGeo, districtMap, activeMetric, zoomTier]);
+  }, [districtsGeo, districtMap, activeMetric, zoomTier, hasTelemetry]);
 
   const getFeatureRecord = (feature) => {
     const props = feature.properties || {};
     const id = (props.id || '').toLowerCase();
     const name = (props.district || props.name || '').toLowerCase();
-    return districtMap.get(id) || districtMap.get(name) || {
+    const found = districtMap.get(id) || districtMap.get(name);
+    if (found) return found;
+
+    return {
       id: props.id,
       name: props.district || props.name,
       district: props.district || props.name,
       state: props.state,
       lat: props.rep_lat,
       lon: props.rep_lon,
-      temp: 32.0,
-      rh: 55.0,
-      wind: 3.0,
-      hi: 36.5,
-      wbgt: 29.8,
-      utci: 30.5,
-      utci_category: 'Moderate Heat Stress',
-      utci_color: '#f59e0b',
-      category: 'Caution',
-      color: '#f59e0b',
-      risk_score: 42,
-      heat_stress_score: 48,
-      heat_stress_tier: 'MODERATE'
+      temp: null,
+      rh: null,
+      wind: null,
+      hi: null,
+      wbgt: null,
+      utci: null,
+      utci_category: null,
+      utci_color: null,
+      category: null,
+      color: null,
+      risk_score: null,
+      heat_stress_score: null,
+      heat_stress_tier: null,
+      isAvailable: false
     };
   };
 
@@ -238,16 +250,24 @@ export default function IndiaHeatMap({
   const getDistrictStyle = (feature) => {
     const dRecord = getFeatureRecord(feature);
     const dId = (feature.properties?.id || '').toLowerCase();
-    const isSelected = selectedZone && selectedZone.id.toLowerCase() === dId;
-    const isHovered = hoveredDistrict && hoveredDistrict.id.toLowerCase() === dId;
-    const isHighRisk = ['Danger', 'Extreme Danger', 'Severe'].includes(dRecord.category);
+    const isSelected = selectedZone && selectedZone.id?.toLowerCase() === dId;
+    const isHovered = hoveredDistrict && hoveredDistrict.id?.toLowerCase() === dId;
+    const isHighRisk = dRecord.category && ['Danger', 'Extreme Danger', 'Severe'].includes(dRecord.category);
 
     let metricVal = dRecord.utci ?? dRecord.wbgt;
     if (activeMetric === 'wbgt') metricVal = dRecord.wbgt;
     else if (activeMetric === 'hi') metricVal = dRecord.hi;
 
-    // Continuous color ramp value (Task 2a)
-    const continuousFillColor = getContinuousColor(metricVal, activeMetric);
+    let continuousFillColor;
+    let fillOpacity = 0.55;
+
+    if (metricVal != null) {
+      continuousFillColor = getContinuousColor(metricVal, activeMetric);
+    } else {
+      // Neutral muted state when telemetry is unavailable
+      continuousFillColor = isDark ? '#1e293b' : '#cbd5e1';
+      fillOpacity = 0.35;
+    }
 
     const strokeColor = isSelected 
       ? (isDark ? '#38bdf8' : '#0284c7')
@@ -265,7 +285,7 @@ export default function IndiaHeatMap({
 
     return {
       fillColor: continuousFillColor,
-      fillOpacity: 0.55,
+      fillOpacity: fillOpacity,
       color: strokeColor,
       weight: strokeWeight,
       opacity: 0.95
@@ -346,6 +366,23 @@ export default function IndiaHeatMap({
           <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
           <span>GIS Thermal Risk Field</span>
         </div>
+
+        {!hasTelemetry && (
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '3px 10px',
+            borderRadius: '9999px',
+            backgroundColor: isDark ? 'rgba(30, 41, 59, 0.85)' : 'rgba(241, 245, 249, 0.9)',
+            border: '1px solid var(--border-subtle)',
+            fontSize: '0.72rem',
+            color: 'var(--text-secondary)'
+          }}>
+            <AlertCircle size={12} style={{ color: '#f59e0b', flexShrink: 0 }} />
+            <span>Live Weather Telemetry Temporarily Unavailable</span>
+          </div>
+        )}
 
         {/* Metric Layer Switcher: UTCI, WBGT, HI (Temp removed from map layer) */}
         <div className="metric-pill-group">
@@ -451,41 +488,61 @@ export default function IndiaHeatMap({
               onEachFeature={(feature, layer) => {
                 onEachDistrict(feature, layer);
                 const d = getFeatureRecord(feature);
-                const hss = d.heat_stress_score ?? Math.min(100, Math.round(d.wbgt * 2.2));
-                const hssTier = d.heat_stress_tier ?? (hss >= 70 ? 'VERY HIGH' : hss >= 55 ? 'HIGH' : hss >= 40 ? 'MODERATE' : 'LOW');
 
-                // Tooltip showing exact data-driven observations
-                layer.bindTooltip(
-                  `<div class="district-tooltip-content">
-                    <div class="tooltip-header">
-                      <span class="tooltip-name">${d.name.toUpperCase()}</span>
-                      <span class="tooltip-state">${d.state}</span>
-                    </div>
-                    <div class="tooltip-divider"></div>
-                    <div class="tooltip-grid">
-                      <div class="tooltip-item"><span>WBGT:</span><strong>${d.wbgt}°C</strong></div>
-                      <div class="tooltip-item"><span>Heat Index:</span><strong>${d.hi}°C</strong></div>
-                      <div class="tooltip-item"><span>UTCI:</span><strong>${d.utci !== undefined ? d.utci + '°C' : 'N/A'}</strong></div>
-                      <div class="tooltip-item"><span>Temperature:</span><strong>${d.temp}°C</strong></div>
-                      <div class="tooltip-item"><span>Humidity:</span><strong>${d.rh}%</strong></div>
-                      <div class="tooltip-item"><span>Wind:</span><strong>${d.wind} m/s</strong></div>
-                    </div>
-                    <div class="tooltip-footer-row">
-                      <span class="tooltip-risk-tag" style="color: ${d.color}; border-color: ${d.color}60; background: ${d.color}15;">
-                        RISK: ${d.category.toUpperCase()}
-                      </span>
-                      <span class="tooltip-hss-tag">
-                        HEAT STRESS: <strong>${hssTier} (${hss}/100)</strong>
-                      </span>
-                    </div>
-                    ${d.utci_category ? `<div style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 4px; display: flex; justify-content: space-between;"><span>UTCI Stress:</span><strong style="color: ${d.utci_color || 'var(--text-primary)'}">${d.utci_category}</strong></div>` : ''}
-                  </div>`,
-                  {
-                    sticky: true,
-                    direction: 'top',
-                    className: 'custom-district-leaflet-tooltip'
-                  }
-                );
+                if (d.wbgt != null) {
+                  const hss = d.heat_stress_score ?? Math.min(100, Math.round(d.wbgt * 2.2));
+                  const hssTier = d.heat_stress_tier ?? (hss >= 70 ? 'VERY HIGH' : hss >= 55 ? 'HIGH' : hss >= 40 ? 'MODERATE' : 'LOW');
+
+                  layer.bindTooltip(
+                    `<div class="district-tooltip-content">
+                      <div class="tooltip-header">
+                        <span class="tooltip-name">${d.name.toUpperCase()}</span>
+                        <span class="tooltip-state">${d.state}</span>
+                      </div>
+                      <div class="tooltip-divider"></div>
+                      <div class="tooltip-grid">
+                        <div class="tooltip-item"><span>WBGT:</span><strong>${d.wbgt}°C</strong></div>
+                        <div class="tooltip-item"><span>Heat Index:</span><strong>${d.hi}°C</strong></div>
+                        <div class="tooltip-item"><span>UTCI:</span><strong>${d.utci !== undefined ? d.utci + '°C' : 'N/A'}</strong></div>
+                        <div class="tooltip-item"><span>Temperature:</span><strong>${d.temp}°C</strong></div>
+                        <div class="tooltip-item"><span>Humidity:</span><strong>${d.rh}%</strong></div>
+                        <div class="tooltip-item"><span>Wind:</span><strong>${d.wind} m/s</strong></div>
+                      </div>
+                      <div class="tooltip-footer-row">
+                        <span class="tooltip-risk-tag" style="color: ${d.color}; border-color: ${d.color}60; background: ${d.color}15;">
+                          RISK: ${(d.category || '').toUpperCase()}
+                        </span>
+                        <span class="tooltip-hss-tag">
+                          HEAT STRESS: <strong>${hssTier} (${hss}/100)</strong>
+                        </span>
+                      </div>
+                      ${d.utci_category ? `<div style="font-size: 0.68rem; color: var(--text-secondary); margin-top: 4px; display: flex; justify-content: space-between;"><span>UTCI Stress:</span><strong style="color: ${d.utci_color || 'var(--text-primary)'}">${d.utci_category}</strong></div>` : ''}
+                    </div>`,
+                    {
+                      sticky: true,
+                      direction: 'top',
+                      className: 'custom-district-leaflet-tooltip'
+                    }
+                  );
+                } else {
+                  layer.bindTooltip(
+                    `<div class="district-tooltip-content">
+                      <div class="tooltip-header">
+                        <span class="tooltip-name">${(d.name || '').toUpperCase()}</span>
+                        <span class="tooltip-state">${d.state || ''}</span>
+                      </div>
+                      <div class="tooltip-divider"></div>
+                      <div style="font-size: 0.75rem; color: var(--text-secondary); padding: 4px 0;">
+                        Live Weather Telemetry Temporarily Unavailable
+                      </div>
+                    </div>`,
+                    {
+                      sticky: true,
+                      direction: 'top',
+                      className: 'custom-district-leaflet-tooltip'
+                    }
+                  );
+                }
               }}
             />
           )}

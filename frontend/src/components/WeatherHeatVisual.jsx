@@ -170,15 +170,26 @@ function getSunDynamics(wbgtValue, tempValue, isNight = false) {
 }
 
 export default function WeatherHeatVisual({ zone }) {
-  const temp = Number(zone?.temperature ?? zone?.temp ?? 32.0);
-  const humidity = Number(zone?.humidity ?? zone?.rh ?? 60.0);
-  const wbgt = Number(zone?.wbgt ?? 30.0);
-  const heatIndex = Number(zone?.heat_index ?? zone?.hi ?? 34.0);
-  const windSpeed = Number(zone?.wind_speed ?? zone?.wind ?? 3.5);
-  const utci = Number(zone?.utci ?? 30.0);
-  const heatStressScore = Number(zone?.heat_stress_score ?? Math.min(100, Math.round(wbgt * 2.2)));
+  const rawTemp = zone?.temperature ?? zone?.temp;
+  const rawHumidity = zone?.humidity ?? zone?.rh;
+  const rawWbgt = zone?.wbgt;
+  const rawHeatIndex = zone?.heat_index ?? zone?.hi;
+  const rawWind = zone?.wind_speed ?? zone?.wind;
+  const rawUtci = zone?.utci;
+  const rawHss = zone?.heat_stress_score;
+
+  const hasTelemetry = rawWbgt != null && rawTemp != null;
+
+  const temp = hasTelemetry ? Number(rawTemp) : null;
+  const humidity = rawHumidity != null ? Number(rawHumidity) : null;
+  const wbgt = hasTelemetry ? Number(rawWbgt) : null;
+  const heatIndex = rawHeatIndex != null ? Number(rawHeatIndex) : null;
+  const windSpeed = rawWind != null ? Number(rawWind) : null;
+  const utci = rawUtci != null ? Number(rawUtci) : null;
+  const heatStressScore = rawHss != null ? Number(rawHss) : (wbgt != null ? Math.min(100, Math.round(wbgt * 2.2)) : null);
 
   // Automatic real-time day/night detection with 30s interval for live boundary transitions
+  // Prioritizes district observation_time, falling back to browser India time (Asia/Kolkata)
   const [isNight, setIsNight] = useState(() => checkIsNightTime(zone?.observation_time));
 
   useEffect(() => {
@@ -189,10 +200,18 @@ export default function WeatherHeatVisual({ zone }) {
     return () => clearInterval(timer);
   }, [zone?.observation_time]);
 
-  // Continuous Sun dynamics (vibrant blue at night, gold-to-crimson heat scale in daytime)
+  // Continuous Sun dynamics:
+  // - Real/cached data: daytime severity colors vs night electric blue
+  // - Unavailable data: browser India time decides: night -> blue ambient orb, day -> neutral mild golden sun
   const dynamics = useMemo(() => {
+    if (!hasTelemetry) {
+      if (isNight) {
+        return getSunDynamics(null, null, true);
+      }
+      return getSunDynamics(25.0, 28.0, false);
+    }
     return getSunDynamics(wbgt, temp, isNight);
-  }, [wbgt, temp, isNight]);
+  }, [hasTelemetry, wbgt, temp, isNight]);
 
   // 16 evenly spaced rays (8 primary, 8 secondary) strictly at 22.5° intervals around center (0,0)
   const rays = useMemo(() => {
@@ -374,8 +393,8 @@ export default function WeatherHeatVisual({ zone }) {
         {/* Visual Group: Temperature value and AMBIENT TEMPERATURE label */}
         <div className="ambient-temp-group">
           <div className="ambient-temperature">
-            <span className="temp-num">{temp.toFixed(1)}</span>
-            <span className="temp-unit">°C</span>
+            <span className="temp-num">{temp != null ? temp.toFixed(1) : '—'}</span>
+            {temp != null && <span className="temp-unit">°C</span>}
           </div>
           <div className="ambient-label">AMBIENT TEMPERATURE</div>
         </div>
@@ -390,8 +409,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="metric-cell-label">UTCI</span>
             </div>
             <div className="metric-cell-val">
-              <span className="metric-num">{utci.toFixed(1)}</span>
-              <span className="metric-unit">°C</span>
+              <span className="metric-num">{utci != null ? utci.toFixed(1) : '—'}</span>
+              {utci != null && <span className="metric-unit">°C</span>}
             </div>
           </div>
 
@@ -403,8 +422,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="metric-cell-label" style={{ color: dynamics.accentColor }}>WBGT</span>
             </div>
             <div className="metric-cell-val">
-              <span className="metric-num" style={{ color: dynamics.accentColor }}>{wbgt.toFixed(1)}</span>
-              <span className="metric-unit" style={{ color: dynamics.accentColor }}>°C</span>
+              <span className="metric-num" style={{ color: dynamics.accentColor }}>{wbgt != null ? wbgt.toFixed(1) : '—'}</span>
+              {wbgt != null && <span className="metric-unit" style={{ color: dynamics.accentColor }}>°C</span>}
             </div>
           </div>
 
@@ -416,8 +435,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="metric-cell-label">HEAT STRESS</span>
             </div>
             <div className="metric-cell-val">
-              <span className="metric-num">{heatStressScore}</span>
-              <span className="metric-unit">/100</span>
+              <span className="metric-num">{heatStressScore != null ? heatStressScore : '—'}</span>
+              {heatStressScore != null && <span className="metric-unit">/100</span>}
             </div>
           </div>
         </div>
@@ -429,8 +448,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="sec-label">WIND</span>
             </span>
             <span className="sec-val-group">
-              <span className="sec-num">{windSpeed.toFixed(1)}</span>
-              <span className="sec-unit">m/s</span>
+              <span className="sec-num">{windSpeed != null ? windSpeed.toFixed(1) : '—'}</span>
+              {windSpeed != null && <span className="sec-unit">m/s</span>}
             </span>
           </div>
 
@@ -442,8 +461,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="sec-label">HEAT INDEX</span>
             </span>
             <span className="sec-val-group">
-              <span className="sec-num">{heatIndex.toFixed(1)}</span>
-              <span className="sec-unit">°C</span>
+              <span className="sec-num">{heatIndex != null ? heatIndex.toFixed(1) : '—'}</span>
+              {heatIndex != null && <span className="sec-unit">°C</span>}
             </span>
           </div>
 
@@ -455,8 +474,8 @@ export default function WeatherHeatVisual({ zone }) {
               <span className="sec-label">HUMIDITY</span>
             </span>
             <span className="sec-val-group">
-              <span className="sec-num">{humidity.toFixed(0)}</span>
-              <span className="sec-unit">%</span>
+              <span className="sec-num">{humidity != null ? humidity.toFixed(0) : '—'}</span>
+              {humidity != null && <span className="sec-unit">%</span>}
             </span>
           </div>
         </div>

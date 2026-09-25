@@ -90,23 +90,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+AUTHENTIC_SEED_FILE = DATA_DIR / "authentic_weather_seed.json"
+LATEST_CACHE_FILE = DATA_DIR / "weather_cache_latest.json"
+
 # In-memory caches (dict with timestamp)
 DISTRICTS_CACHE: Dict[str, Any] = {
     "timestamp": 0.0,
     "data": [],
     "states": {},
+    "cached_at": "",
+    "observation_time": "",
+    "data_state": "CACHED",
+    "weather_source": "Open-Meteo (Cached)",
     "last_refresh_failed": False,
     "last_failure_timestamp": 0.0,
-    "last_failure_detail": "",
+    "cooldown_seconds": 0,
+    "upstream_rate_limited": False,
 }
 FORECAST_CACHE: Dict[str, Dict[str, Any]] = {}
 SPATIAL_CACHE: Dict[str, Any] = {
     "timestamp": 0.0,
     "data": None
 }
-CACHE_TTL_SECONDS = 600  # 10 minutes cache
-UPSTREAM_FAILURE_COOLDOWN_SECONDS = 30
-DISTRICTS_FETCH_LOCK = asyncio.Lock()
+FRESH_CACHE_TTL_SECONDS = 1800  # 30 minutes for LIVE state
+MAX_CACHE_TTL_SECONDS = 86400   # 24 hours before UNAVAILABLE
+UPSTREAM_429_COOLDOWN_SECONDS = 600  # 10 minutes cooldown on HTTP 429
+UPSTREAM_ERROR_COOLDOWN_SECONDS = 60  # 1 minute cooldown on other errors
+REFRESH_LOCK = asyncio.Lock()
+REFRESH_IN_PROGRESS = False
+
+
+def load_authentic_weather_seed() -> bool:
+    """Load authentic 83-district real Open-Meteo observation dataset on cold start."""
+    source_file = LATEST_CACHE_FILE if LATEST_CACHE_FILE.exists() else AUTHENTIC_SEED_FILE
+    if not source_file.exists():
+        logger.warning(f"No weather seed file found at {source_file}")
+        return False
+    try:
+        with open(source_file, "r", encoding="utf-8") as f:
+            seed = json.load(f)
+        districts = seed.get("districts", [])
+        if len(districts) == 83:
+            DISTRICTS_CACHE["data"] = districts
+            captured_ts = float(seed.get("captured_at_timestamp", time.time() - 2400))
+            DISTRICTS_CACHE["timestamp"] = captured_ts
+            DISTRICTS_CACHE["cached_at"] = seed.get("captured_at", datetime.utcnow().isoformat() + "Z")
+            DISTRICTS_CACHE["observation_time"] = districts[0].get("observation_time", "")
+            DISTRICTS_CACHE["data_state"] = "CACHED"
+            DISTRICTS_CACHE["weather_source"] = "Open-Meteo (Cached)"
+            DISTRICTS_CACHE["states"] = {
+                "Tamil Nadu": len([d for d in districts if d.get("state") == "Tamil Nadu"]),
+                "Kerala": len([d for d in districts if d.get("state") == "Kerala"]),
+                "Karnataka": len([d for d in districts if d.get("state") == "Karnataka"])
+            }
+            logger.info(f"Loaded authentic weather snapshot from {source_file.name}: 83 districts in CACHED state.")
+            return True
+        else:
+            logger.warning(f"Seed file contains {len(districts)} districts, expected 83.")
+            return False
+    except Exception as exc:
+        logger.error(f"Error loading authentic weather seed: {exc}")
+        return False
 
 
 def get_valid_cached_districts(expected_ids: Optional[set[str]] = None) -> Optional[List[Dict[str, Any]]]:
@@ -144,7 +188,7 @@ def load_districts() -> List[Dict[str, Any]]:
 
 @app.on_event("startup")
 def validate_startup_districts():
-    """Strict startup validation for the 83 South India districts and synthetic mortality provider."""
+    """Strict startup validation for the 83 South India districts, authentic weather seed, and mortality provider."""
     districts = load_districts()
     tn = [d for d in districts if d.get("state") == "Tamil Nadu"]
     kl = [d for d in districts if d.get("state") == "Kerala"]
@@ -159,6 +203,9 @@ def validate_startup_districts():
         logger.error(err_msg)
         raise RuntimeError(err_msg)
     logger.info("Startup district validation passed: 83 districts verified.")
+
+    # Immediately populate authentic weather seed on cold start
+    load_authentic_weather_seed()
 
     # Initialize and validate synthetic mortality dataset
     try:
@@ -240,295 +287,291 @@ async def health_check():
     }
 
 
-async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Return district data with single-flight protection around cache population."""
-    request_started_at = time.time()
-    if not force_refresh:
-        cached_data = get_valid_cached_districts()
-        if cached_data and request_started_at - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS:
-            return cached_data
-
-    async with DISTRICTS_FETCH_LOCK:
-        cached_data = get_valid_cached_districts()
-        cache_is_fresh = cached_data and time.time() - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS
-        if cache_is_fresh and (not force_refresh or DISTRICTS_CACHE["timestamp"] > request_started_at):
-            return cached_data
-
-        failure_age = time.time() - DISTRICTS_CACHE["last_failure_timestamp"]
-        if failure_age < UPSTREAM_FAILURE_COOLDOWN_SECONDS:
-            if cached_data:
-                DISTRICTS_CACHE["last_refresh_failed"] = True
-                logger.warning("Returning stale cached district data during Open-Meteo failure cooldown.")
-                return cached_data
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=DISTRICTS_CACHE["last_failure_detail"] or "Live weather data is temporarily unavailable from Open-Meteo."
-            )
-
-        DISTRICTS_CACHE["last_refresh_failed"] = False
-        try:
-            districts = await _fetch_and_compute_districts_locked(force_refresh=force_refresh)
-            DISTRICTS_CACHE["last_failure_timestamp"] = 0.0
-            DISTRICTS_CACHE["last_failure_detail"] = ""
-            return districts
-        except Exception as exc:
-            if not get_valid_cached_districts():
-                DISTRICTS_CACHE["last_failure_timestamp"] = time.time()
-                DISTRICTS_CACHE["last_failure_detail"] = str(exc)
-            raise
-
-
-async def _fetch_and_compute_districts_locked(force_refresh: bool = False) -> List[Dict[str, Any]]:
+async def _perform_open_meteo_refresh() -> bool:
     """
-    Batched fetch of live weather for all 83 representative district coordinates
-    via Open-Meteo, followed by exact Rothfusz HI, BOM WBGT, Heat Stress Score, and risk calculation.
+    Asynchronous single-flight background refresh of live weather for all 83 representative
+    district coordinates via Open-Meteo.
+    - If 429: preserves authentic cache, marks CACHED + upstream_rate_limited=True, sets 10-min cooldown.
+    - If success: replaces cache, marks LIVE, clears upstream_rate_limited, writes latest cache snapshot.
+    - Never raises unhandled exception or blocks user request.
     """
-    districts = load_districts()
-    expected_ids = {district["id"] for district in districts}
-    lats = ",".join(str(d["lat"]) for d in districts)
-    lons = ",".join(str(d["lon"]) for d in districts)
+    global REFRESH_IN_PROGRESS
+    if REFRESH_IN_PROGRESS:
+        logger.info("Open-Meteo refresh already in progress, skipping duplicate flight.")
+        return False
 
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lats}&longitude={lons}"
-        f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation"
-        f"&wind_speed_unit=ms"
-        f"&timezone=Asia%2FKolkata"
-    )
+    REFRESH_IN_PROGRESS = True
+    try:
+        districts = load_districts()
+        lats = ",".join(str(d["lat"]) for d in districts)
+        lons = ",".join(str(d["lon"]) for d in districts)
 
-    weather_data = None
-    last_error: Optional[Exception] = None
-    retryable_statuses = {429, 500, 502, 503, 504}
-    rate_limit_retry_used = False
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lats}&longitude={lons}"
+            f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation"
+            f"&wind_speed_unit=ms"
+            f"&timezone=Asia%2FKolkata"
+        )
 
-    for attempt in range(3):
+        weather_data = None
+        rate_limited = False
+        last_error = None
+
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     url,
                     headers={"User-Agent": "ClimateGuard-India/2.0 (early-warning-platform)"}
                 )
-                resp.raise_for_status()
-                weather_data = resp.json()
-                break
+                if resp.status_code == 429:
+                    rate_limited = True
+                    logger.warning("Open-Meteo returned HTTP 429 (Rate Limit Exceeded).")
+                else:
+                    resp.raise_for_status()
+                    weather_data = resp.json()
         except httpx.HTTPStatusError as exc:
-            last_error = exc
-            if exc.response.status_code not in retryable_statuses or attempt == 2:
-                break
             if exc.response.status_code == 429:
-                cached_data = get_valid_cached_districts(expected_ids)
-                if cached_data:
-                    DISTRICTS_CACHE["last_refresh_failed"] = True
-                    logger.warning("Returning stale cached district data because Open-Meteo returned HTTP 429.")
-                    return cached_data
-                if rate_limit_retry_used:
-                    break
-                rate_limit_retry_used = True
-            retry_after = exc.response.headers.get("Retry-After")
-            try:
-                delay = min(10.0, max(1.0, float(retry_after))) if retry_after else 2.0 ** attempt
-            except ValueError:
-                delay = 2.0 ** attempt
-            await asyncio.sleep(delay)
-        except (httpx.RequestError, ValueError) as exc:
+                rate_limited = True
+                logger.warning("Open-Meteo returned HTTP 429 (Rate Limit Exceeded).")
+            else:
+                last_error = exc
+                logger.warning(f"Open-Meteo HTTP error: {exc}")
+        except Exception as exc:
             last_error = exc
-            if attempt == 2:
-                break
-            await asyncio.sleep(2.0 ** attempt)
+            logger.warning(f"Open-Meteo network error during background refresh: {exc}")
 
-    if weather_data is None:
-        exc = last_error or RuntimeError("Open-Meteo returned no weather data")
-        logger.error(f"Error fetching Open-Meteo batched data: {exc}")
-        cached_data = get_valid_cached_districts(expected_ids)
-        if cached_data:
-            logger.warning("Returning stale cached district data due to network error.")
-            DISTRICTS_CACHE["last_refresh_failed"] = True
-            return cached_data
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Unable to retrieve live weather data from Open-Meteo after retries: {exc}"
+        if rate_limited:
+            DISTRICTS_CACHE["upstream_rate_limited"] = True
+            DISTRICTS_CACHE["data_state"] = "CACHED"
+            DISTRICTS_CACHE["weather_source"] = "Open-Meteo (Cached)"
+            DISTRICTS_CACHE["cooldown_until"] = time.time() + 600.0  # 10 minute cooldown
+            DISTRICTS_CACHE["last_failure_timestamp"] = time.time()
+            DISTRICTS_CACHE["last_failure_detail"] = "HTTP 429: Open-Meteo rate limit exceeded"
+            return False
+
+        if weather_data is None:
+            DISTRICTS_CACHE["cooldown_until"] = time.time() + 120.0  # 2 minute retry backoff
+            DISTRICTS_CACHE["last_failure_timestamp"] = time.time()
+            DISTRICTS_CACHE["last_failure_detail"] = str(last_error or "No data returned")
+            return False
+
+        if isinstance(weather_data, dict):
+            weather_data = [weather_data]
+        if not isinstance(weather_data, list) or len(weather_data) != len(districts):
+            logger.warning("Incomplete weather data received from Open-Meteo.")
+            DISTRICTS_CACHE["cooldown_until"] = time.time() + 120.0
+            return False
+
+        required_fields = (
+            "temperature_2m",
+            "relative_humidity_2m",
+            "wind_speed_10m",
+            "shortwave_radiation",
         )
+        for index, weather_record in enumerate(weather_data):
+            current = weather_record.get("current") if isinstance(weather_record, dict) else None
+            if not isinstance(current, dict) or any(current.get(field) is None for field in required_fields):
+                logger.warning(f"Incomplete weather record at index {index}")
+                DISTRICTS_CACHE["cooldown_until"] = time.time() + 120.0
+                return False
 
-    if isinstance(weather_data, dict):
-        weather_data = [weather_data]
-    if not isinstance(weather_data, list) or len(weather_data) != len(districts):
-        cached_data = get_valid_cached_districts(expected_ids)
-        if cached_data:
-            DISTRICTS_CACHE["last_refresh_failed"] = True
-            logger.warning("Returning stale cached district data because Open-Meteo returned an incomplete response.")
-            return cached_data
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Open-Meteo returned an incomplete district weather response."
-        )
+        computed_districts = []
+        now_dt = datetime.utcnow()
+        iso_time = now_dt.isoformat() + "Z"
 
-    required_fields = (
-        "temperature_2m",
-        "relative_humidity_2m",
-        "wind_speed_10m",
-        "shortwave_radiation",
-    )
-    for index, weather_record in enumerate(weather_data):
-        current = weather_record.get("current") if isinstance(weather_record, dict) else None
-        if not isinstance(current, dict) or any(current.get(field) is None for field in required_fields):
-            cached_data = get_valid_cached_districts(expected_ids)
-            if cached_data:
-                DISTRICTS_CACHE["last_refresh_failed"] = True
-                logger.warning("Returning stale cached district data because Open-Meteo returned incomplete district weather data.")
-                return cached_data
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Open-Meteo returned incomplete weather data for district index {index}."
+        for district, w in zip(districts, weather_data):
+            current = w.get("current", {})
+            temp = float(current.get("temperature_2m", 30.0))
+            rh = float(current.get("relative_humidity_2m", 55.0))
+            wind = float(current.get("wind_speed_10m", 3.0))
+            solar = float(current.get("shortwave_radiation", 0.0))
+            obs_time = current.get("time", iso_time)
+
+            hi = calculate_heat_index(temp, rh)
+            wbgt = calculate_wbgt(temp, rh, wind, solar)
+            risk_info = get_risk_category(wbgt)
+            risk_score = calculate_risk_score(wbgt, district["elderly_pct"], district["outdoor_worker_pct"])
+
+            tr = estimate_tr_from_solar(temp, solar, wind)
+            utci_val = compute_utci(temp, tr, wind, rh)
+            utci_info = get_utci_category(utci_val)
+
+            heat_stress_score = calculate_heat_stress_score(wbgt, hi, rh)
+            heat_stress_tier = get_heat_stress_tier(heat_stress_score)
+
+            demographic_vulnerability = round(
+                (district["elderly_pct"] * 1.5 + district["outdoor_worker_pct"] * 2.0) / 3.5 * 2.0, 1
             )
 
-    computed_districts = []
-    iso_time = datetime.utcnow().isoformat() + "Z"
+            d_record = {
+                "id": district["id"],
+                "district": district.get("district", district["name"]),
+                "name": district["name"],
+                "state": district["state"],
+                "lat": district["lat"],
+                "lon": district["lon"],
+                "temperature": round(temp, 1),
+                "humidity": round(rh, 1),
+                "wind_speed": round(wind, 1),
+                "temp": round(temp, 1),
+                "rh": round(rh, 1),
+                "wind": round(wind, 1),
+                "heat_index": hi,
+                "hi": hi,
+                "wbgt": wbgt,
+                "utci": utci_val,
+                "utci_category": utci_info["category"],
+                "utci_color": utci_info["color"],
+                "utci_description": utci_info["description"],
+                "tr": tr,
+                "solar_radiation": round(solar, 1),
+                "heat_stress_score": heat_stress_score,
+                "heat_stress_tier": heat_stress_tier["tier"],
+                "heat_stress_color": heat_stress_tier["color"],
+                "category": risk_info["category"],
+                "risk_category": risk_info["category"],
+                "level": risk_info["level"],
+                "color": risk_info["color"],
+                "risk_weight": risk_info["weight"],
+                "weight": risk_info["weight"],
+                "category_description": risk_info["description"],
+                "elderly_pct": district["elderly_pct"],
+                "outdoor_worker_pct": district["outdoor_worker_pct"],
+                "demographic_vulnerability": demographic_vulnerability,
+                "risk_score": risk_score,
+                "weather_source": "Open-Meteo",
+                "observation_time": obs_time,
+                "imd_heatwave_warning": "None",
+                "updated_at": iso_time
+            }
+            computed_districts.append(d_record)
 
-    for district, w in zip(districts, weather_data):
-        current = w.get("current", {})
-        temp = float(current.get("temperature_2m", 30.0))
-        rh = float(current.get("relative_humidity_2m", 55.0))
-        wind = float(current.get("wind_speed_10m", 3.0))
-        solar = float(current.get("shortwave_radiation", 0.0))
-        obs_time = current.get("time", iso_time)
+        if len(computed_districts) == 83:
+            now_ts = time.time()
+            DISTRICTS_CACHE["data"] = computed_districts
+            DISTRICTS_CACHE["timestamp"] = now_ts
+            DISTRICTS_CACHE["cached_at"] = iso_time
+            DISTRICTS_CACHE["observation_time"] = computed_districts[0].get("observation_time", iso_time)
+            DISTRICTS_CACHE["data_state"] = "LIVE"
+            DISTRICTS_CACHE["weather_source"] = "Open-Meteo (Live)"
+            DISTRICTS_CACHE["upstream_rate_limited"] = False
+            DISTRICTS_CACHE["cooldown_until"] = 0.0
+            DISTRICTS_CACHE["last_failure_timestamp"] = 0.0
+            DISTRICTS_CACHE["last_failure_detail"] = ""
+            DISTRICTS_CACHE["states"] = {
+                "Tamil Nadu": len([d for d in computed_districts if d["state"] == "Tamil Nadu"]),
+                "Kerala": len([d for d in computed_districts if d["state"] == "Kerala"]),
+                "Karnataka": len([d for d in computed_districts if d["state"] == "Karnataka"])
+            }
+            try:
+                cache_payload = {
+                    "source": "Open-Meteo",
+                    "captured_at": iso_time,
+                    "captured_at_timestamp": now_ts,
+                    "data_state": "LIVE",
+                    "weather_source": "Open-Meteo (Live)",
+                    "districts": computed_districts
+                }
+                with open(LATEST_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cache_payload, f, indent=2)
+            except Exception as e:
+                logger.warning(f"Could not persist latest cache to {LATEST_CACHE_FILE}: {e}")
 
-        hi = calculate_heat_index(temp, rh)
-        wbgt = calculate_wbgt(temp, rh, wind, solar)
-        risk_info = get_risk_category(wbgt)
-        risk_score = calculate_risk_score(wbgt, district["elderly_pct"], district["outdoor_worker_pct"])
+            logger.info("Successfully refreshed Open-Meteo live weather data for 83 districts.")
+            return True
+        return False
+    except Exception as exc:
+        logger.error(f"Unexpected error during Open-Meteo refresh: {exc}")
+        DISTRICTS_CACHE["cooldown_until"] = time.time() + 120.0
+        return False
+    finally:
+        REFRESH_IN_PROGRESS = False
 
-        # Universal Thermal Climate Index (UTCI) via pythermalcomfort
-        # Mean radiant temperature (Tr) estimated from incoming shortwave solar irradiance
-        tr = estimate_tr_from_solar(temp, solar, wind)
-        utci_val = compute_utci(temp, tr, wind, rh)
-        utci_info = get_utci_category(utci_val)
 
-        # Cross-index sanity check & logging (warn when indices diverge by > 1 tier)
-        wbgt_tier = risk_info["weight"]
-        utci_tier = utci_info["weight"]
-        if abs(wbgt_tier - utci_tier) > 1:
-            logger.warning(
-                f"[Cross-Index Divergence > 1 Tier] District '{district.get('name')}' ({district.get('state')}): "
-                f"WBGT={wbgt}°C ({risk_info['category']}, tier {wbgt_tier}) vs "
-                f"UTCI={utci_val}°C ({utci_info['category']}, tier {utci_tier}) | "
-                f"T={temp:.1f}°C, RH={rh:.1f}%, Wind={wind:.1f}m/s, Solar={solar:.1f}W/m², ObsTime={obs_time}"
-            )
+async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """
+    Cache-first retrieval of the 83 South India districts.
+    - If valid authentic cached data exists, it is returned IMMEDIATELY.
+    - If cache is stale (>30 min) or force_refresh is requested, triggers an asynchronous background refresh.
+    - If no cache exists, attempts to load seed, or awaits a direct refresh if seed is unavailable.
+    """
+    cached_data = get_valid_cached_districts()
+    if not cached_data:
+        if load_authentic_weather_seed():
+            cached_data = get_valid_cached_districts()
 
-        # ClimateGuard-Derived Normalized Heat Stress Score (0–100) & Tier
-        heat_stress_score = calculate_heat_stress_score(wbgt, hi, rh)
-        heat_stress_tier = get_heat_stress_tier(heat_stress_score)
+    now = time.time()
+    cache_age = now - DISTRICTS_CACHE.get("timestamp", 0.0) if cached_data else 999999.0
+    is_stale = cache_age >= 1800.0 or DISTRICTS_CACHE.get("data_state") == "CACHED"
 
-        # Demographic vulnerability composite index (0-100)
-        demographic_vulnerability = round(
-            (district["elderly_pct"] * 1.5 + district["outdoor_worker_pct"] * 2.0) / 3.5 * 2.0, 1
-        )
+    if cached_data:
+        if (is_stale or force_refresh) and not REFRESH_IN_PROGRESS and now >= DISTRICTS_CACHE.get("cooldown_until", 0.0):
+            asyncio.create_task(_perform_open_meteo_refresh())
+        return cached_data
 
-        d_record = {
-            "id": district["id"],
-            "district": district.get("district", district["name"]),
-            "name": district["name"],
-            "state": district["state"],
-            "lat": district["lat"],
-            "lon": district["lon"],
-            
-            # Weather variables
-            "temperature": round(temp, 1),
-            "humidity": round(rh, 1),
-            "wind_speed": round(wind, 1),
-            # Aliases for backward compatibility
-            "temp": round(temp, 1),
-            "rh": round(rh, 1),
-            "wind": round(wind, 1),
+    await _perform_open_meteo_refresh()
+    cached_data = get_valid_cached_districts()
+    if cached_data:
+        return cached_data
 
-            # Thermal stress calculations
-            "heat_index": hi,
-            "hi": hi,
-            "wbgt": wbgt,
-            "utci": utci_val,
-            "utci_category": utci_info["category"],
-            "utci_color": utci_info["color"],
-            "utci_description": utci_info["description"],
-            "tr": tr,
-            "solar_radiation": round(solar, 1),
-            "heat_stress_score": heat_stress_score,
-            "heat_stress_tier": heat_stress_tier["tier"],
-            "heat_stress_color": heat_stress_tier["color"],
-            "category": risk_info["category"],
-            "risk_category": risk_info["category"],
-            "level": risk_info["level"],
-            "color": risk_info["color"],
-            "risk_weight": risk_info["weight"],
-            "weight": risk_info["weight"],
-            "category_description": risk_info["description"],
-
-            # Demographic & risk score
-            "elderly_pct": district["elderly_pct"],
-            "outdoor_worker_pct": district["outdoor_worker_pct"],
-            "demographic_vulnerability": demographic_vulnerability,
-            "risk_score": risk_score,
-
-            # Metadata & sources
-            "weather_source": "Open-Meteo",
-            "observation_time": obs_time,
-            "imd_heatwave_warning": "None",
-            "updated_at": iso_time
-        }
-        computed_districts.append(d_record)
-
-    calculated_fields = {
-        "id", "district", "state", "temp", "rh", "wind",
-        "hi", "wbgt", "utci", "updated_at",
-    }
-    if (
-        len(computed_districts) != len(districts)
-        or {record.get("id") for record in computed_districts} != expected_ids
-        or any(not calculated_fields.issubset(record) for record in computed_districts)
-    ):
-        cached_data = get_valid_cached_districts(expected_ids)
-        if cached_data:
-            DISTRICTS_CACHE["last_refresh_failed"] = True
-            logger.warning("Returning stale cached district data because calculated district data was incomplete.")
-            return cached_data
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Open-Meteo district data could not be converted into a complete district response."
-        )
-
-    DISTRICTS_CACHE["timestamp"] = time.time()
-    DISTRICTS_CACHE["data"] = computed_districts
-    DISTRICTS_CACHE["states"] = {
-        "Tamil Nadu": len([d for d in computed_districts if d["state"] == "Tamil Nadu"]),
-        "Kerala": len([d for d in computed_districts if d["state"] == "Kerala"]),
-        "Karnataka": len([d for d in computed_districts if d["state"] == "Karnataka"])
-    }
-
-    return computed_districts
+    return []
 
 
 @app.get("/api/districts")
 async def get_districts(refresh: bool = False):
     """
     Primary endpoint for the 83 South India operational districts.
-    Returns calculated thermal stress metrics computed via batched Open-Meteo queries,
-    cached for 10 minutes in memory. Pass ?refresh=true for manual on-demand refresh.
+    Returns calculated thermal stress metrics from authentic weather cache immediately.
+    Schedules asynchronous background refresh when stale (>30 min).
     """
     now = time.time()
-    cached_data = get_valid_cached_districts()
-    was_cached = not refresh and cached_data and (now - DISTRICTS_CACHE["timestamp"] < CACHE_TTL_SECONDS)
+    districts = await fetch_and_compute_districts(force_refresh=refresh)
     
-    refresh_failed = bool(refresh and DISTRICTS_CACHE.get("last_refresh_failed", False))
-    try:
-        districts = await fetch_and_compute_districts(force_refresh=refresh)
-    except Exception as exc:
-        logger.warning(f"Refresh failed, returning last known data: {exc}")
-        cached_data = get_valid_cached_districts()
-        if cached_data:
-            districts = cached_data
-            refresh_failed = True
-        else:
-            raise
+    if not districts or len(districts) != 83:
+        return {
+            "data_state": "UNAVAILABLE",
+            "weather_source": "Unavailable",
+            "observation_time": "",
+            "cached_at": "",
+            "cache_age_seconds": 0.0,
+            "is_stale": True,
+            "upstream_rate_limited": bool(DISTRICTS_CACHE.get("upstream_rate_limited", False)),
+            "total": 0,
+            "states": {},
+            "districts": [],
+            "boundary_source": "Government Administrative Boundary Geospatial Datasets",
+            "cached": False,
+            "refresh_failed": True,
+            "updated_at": datetime.utcnow().isoformat() + "Z"
+        }
+
+    cache_ts = DISTRICTS_CACHE.get("timestamp", 0.0)
+    cache_age = max(0.0, now - cache_ts)
+    is_stale = cache_age >= 1800.0
+    is_rate_limited = bool(DISTRICTS_CACHE.get("upstream_rate_limited", False))
+
+    if cache_age > 86400.0:
+        data_state = "UNAVAILABLE"
+        weather_source = "Unavailable"
+    elif DISTRICTS_CACHE.get("data_state") == "LIVE" and cache_age <= 1800.0 and not is_rate_limited:
+        data_state = "LIVE"
+        weather_source = "Open-Meteo (Live)"
+    else:
+        data_state = "CACHED"
+        weather_source = "Open-Meteo (Cached)"
+
+    cached_at = DISTRICTS_CACHE.get("cached_at", "")
+    observation_time = DISTRICTS_CACHE.get("observation_time", "") or (districts[0].get("observation_time", "") if districts else "")
 
     return {
+        "data_state": data_state,
+        "weather_source": weather_source,
+        "observation_time": observation_time,
+        "cached_at": cached_at,
+        "cache_age_seconds": round(cache_age, 1),
+        "is_stale": is_stale,
+        "upstream_rate_limited": is_rate_limited,
         "total": len(districts),
         "states": DISTRICTS_CACHE.get("states", {
             "Tamil Nadu": 38,
@@ -536,12 +579,10 @@ async def get_districts(refresh: bool = False):
             "Karnataka": 31
         }),
         "districts": districts,
-        "weather_source": "Open-Meteo",
         "boundary_source": "Government Administrative Boundary Geospatial Datasets",
-        "cached": bool(was_cached),
-        "cache_age_seconds": round(now - DISTRICTS_CACHE["timestamp"], 1) if was_cached else 0.0,
-        "refresh_failed": refresh_failed,
-        "updated_at": districts[0]["updated_at"] if districts else datetime.utcnow().isoformat() + "Z"
+        "cached": (data_state == "CACHED"),
+        "refresh_failed": is_rate_limited,
+        "updated_at": cached_at or datetime.utcnow().isoformat() + "Z"
     }
 
 
