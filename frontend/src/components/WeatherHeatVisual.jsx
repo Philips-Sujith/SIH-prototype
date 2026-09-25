@@ -15,24 +15,23 @@ import { getThermalIntensity } from '../utils/thermalColorRamp';
  * Prioritizes district observation_time if available, with live client-clock fallback in Asia/Kolkata.
  */
 function checkIsNightTime(observationTime) {
-  if (observationTime && typeof observationTime === 'string') {
-    const timeMatch = observationTime.match(/T(\d{2}):(\d{2})/);
-    if (timeMatch) {
-      const hour = parseInt(timeMatch[1], 10);
-      const minute = parseInt(timeMatch[2], 10);
-      const totalMinutes = hour * 60 + minute;
-      return totalMinutes >= 18 * 60 + 30 || totalMinutes < 6 * 60;
-    }
-  }
-
   try {
+    let date = new Date();
+    if (observationTime && typeof observationTime === 'string') {
+      const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(observationTime);
+      date = hasTimezone
+        ? new Date(observationTime)
+        : new Date(`${observationTime}+05:30`);
+      if (Number.isNaN(date.getTime())) date = new Date();
+    }
+
     const formatter = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Kolkata',
       hour: 'numeric',
       minute: 'numeric',
       hour12: false
     });
-    const parts = formatter.formatToParts(new Date());
+    const parts = formatter.formatToParts(date);
     const hour = parseInt(parts.find((p) => p.type === 'hour')?.value || '12', 10);
     const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
     const totalMinutes = hour * 60 + minute;
@@ -171,26 +170,24 @@ function getSunDynamics(wbgtValue, tempValue, isNight = false) {
 }
 
 export default function WeatherHeatVisual({ zone }) {
-  if (!zone) return null;
-
-  const temp = Number(zone.temperature ?? zone.temp ?? 32.0);
-  const humidity = Number(zone.humidity ?? zone.rh ?? 60.0);
-  const wbgt = Number(zone.wbgt ?? 30.0);
-  const heatIndex = Number(zone.heat_index ?? zone.hi ?? 34.0);
-  const windSpeed = Number(zone.wind_speed ?? zone.wind ?? 3.5);
-  const utci = Number(zone.utci ?? 30.0);
-  const heatStressScore = Number(zone.heat_stress_score ?? Math.min(100, Math.round(wbgt * 2.2)));
+  const temp = Number(zone?.temperature ?? zone?.temp ?? 32.0);
+  const humidity = Number(zone?.humidity ?? zone?.rh ?? 60.0);
+  const wbgt = Number(zone?.wbgt ?? 30.0);
+  const heatIndex = Number(zone?.heat_index ?? zone?.hi ?? 34.0);
+  const windSpeed = Number(zone?.wind_speed ?? zone?.wind ?? 3.5);
+  const utci = Number(zone?.utci ?? 30.0);
+  const heatStressScore = Number(zone?.heat_stress_score ?? Math.min(100, Math.round(wbgt * 2.2)));
 
   // Automatic real-time day/night detection with 30s interval for live boundary transitions
-  const [isNight, setIsNight] = useState(() => checkIsNightTime(zone.observation_time));
+  const [isNight, setIsNight] = useState(() => checkIsNightTime(zone?.observation_time));
 
   useEffect(() => {
-    setIsNight(checkIsNightTime(zone.observation_time));
+    setIsNight(checkIsNightTime(zone?.observation_time));
     const timer = setInterval(() => {
-      setIsNight(checkIsNightTime(zone.observation_time));
+      setIsNight(checkIsNightTime(zone?.observation_time));
     }, 30000);
     return () => clearInterval(timer);
-  }, [zone.observation_time]);
+  }, [zone?.observation_time]);
 
   // Continuous Sun dynamics (vibrant blue at night, gold-to-crimson heat scale in daytime)
   const dynamics = useMemo(() => {
@@ -204,6 +201,8 @@ export default function WeatherHeatVisual({ zone }) {
       isPrimary: i % 2 === 0
     }));
   }, []);
+
+  if (!zone) return null;
 
   return (
     <div className="telemetry-content-wrapper">

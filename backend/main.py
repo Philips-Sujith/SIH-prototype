@@ -7,6 +7,7 @@ Operational Scope: South India (Tamil Nadu: 38, Kerala: 14, Karnataka: 31 = 83 D
 import os
 import json
 import time
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -233,25 +234,76 @@ async def fetch_and_compute_districts(force_refresh: bool = False) -> List[Dict[
         f"&timezone=Asia%2FKolkata"
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers={"User-Agent": "ClimateGuard-India/2.0 (early-warning-platform)"})
-            resp.raise_for_status()
-            weather_data = resp.json()
-    except Exception as exc:
+    weather_data = None
+    last_error: Optional[Exception] = None
+    retryable_statuses = {429, 500, 502, 503, 504}
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "ClimateGuard-India/2.0 (early-warning-platform)"}
+                )
+                resp.raise_for_status()
+                weather_data = resp.json()
+                break
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code not in retryable_statuses or attempt == 2:
+                break
+            retry_after = exc.response.headers.get("Retry-After")
+            try:
+                delay = min(10.0, max(1.0, float(retry_after))) if retry_after else 2.0 ** attempt
+            except ValueError:
+                delay = 2.0 ** attempt
+            await asyncio.sleep(delay)
+        except (httpx.RequestError, ValueError) as exc:
+            last_error = exc
+            if attempt == 2:
+                break
+            await asyncio.sleep(2.0 ** attempt)
+
+    if weather_data is None:
+        exc = last_error or RuntimeError("Open-Meteo returned no weather data")
         logger.error(f"Error fetching Open-Meteo batched data: {exc}")
         if DISTRICTS_CACHE["data"]:
             logger.warning("Returning stale cached district data due to network error.")
             return DISTRICTS_CACHE["data"]
-        # Resilient cold-start fallback when shared cloud IP is temporarily rate-limited (HTTP 429)
-        logger.warning("Open-Meteo rate-limited on cold start; using baseline weather for 83 districts.")
-        weather_data = [
-            {"current": {"temperature_2m": 31.0, "relative_humidity_2m": 58.0, "wind_speed_10m": 2.8, "shortwave_radiation": 0.0}}
-            for _ in districts
-        ]
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Unable to retrieve live weather data from Open-Meteo after retries: {exc}"
+        )
 
-    if not isinstance(weather_data, list):
+    if isinstance(weather_data, dict):
         weather_data = [weather_data]
+    if not isinstance(weather_data, list) or len(weather_data) != len(districts):
+        cached_data = DISTRICTS_CACHE["data"]
+        if isinstance(cached_data, list) and len(cached_data) == len(districts):
+            logger.warning("Returning stale cached district data because Open-Meteo returned an incomplete response.")
+            return cached_data
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Open-Meteo returned an incomplete district weather response."
+        )
+
+    required_fields = (
+        "temperature_2m",
+        "relative_humidity_2m",
+        "wind_speed_10m",
+        "shortwave_radiation",
+    )
+    for index, weather_record in enumerate(weather_data):
+        current = weather_record.get("current") if isinstance(weather_record, dict) else None
+        if not isinstance(current, dict) or any(current.get(field) is None for field in required_fields):
+            cached_data = DISTRICTS_CACHE["data"]
+            if isinstance(cached_data, list) and len(cached_data) == len(districts):
+                logger.warning("Returning stale cached district data because Open-Meteo returned incomplete district weather data.")
+                return cached_data
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Open-Meteo returned incomplete weather data for district index {index}."
+            )
 
     computed_districts = []
     iso_time = datetime.utcnow().isoformat() + "Z"
