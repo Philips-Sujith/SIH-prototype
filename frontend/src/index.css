@@ -3593,7 +3593,7 @@ select option {
   position: relative;
   overflow: hidden;
   width: 100%;
-  min-height: 136px;
+  min-height: 148px;
   flex: 1 0 auto;
   padding: 10px 14px 8px;
   box-sizing: border-box;
@@ -3604,8 +3604,8 @@ select option {
 
 .sun-graphic {
   position: relative;
-  width: clamp(100px, 24vw, 126px);
-  height: clamp(100px, 24vw, 126px);
+  width: clamp(112px, 26vw, 142px);
+  height: clamp(112px, 26vw, 142px);
   aspect-ratio: 1 / 1;
   margin: 0 auto;
   display: flex;
@@ -3764,7 +3764,7 @@ select option {
 }
 
 .ambient-label {
-  font-size: clamp(0.62rem, 1.3vw, 0.70rem);
+  font-size: clamp(0.76rem, 1.6vw, 0.86rem);
   font-weight: 800;
   letter-spacing: 0.10em;
   color: var(--text-muted);
