@@ -3583,28 +3583,29 @@ select option {
   overflow: hidden;
 }
 
-/* Dedicated Layout Container for Sun + Temperature: Horizontal Two-Column Composition */
+/* Dedicated Layout Container for Sun + Temperature: Exact 50/50 Horizontal Split */
 .temperature-section,
 .solar-visualization {
   display: grid;
   grid-template-columns: 1fr 1fr;
   align-items: center;
+  justify-items: center;
   position: relative;
   overflow: hidden;
   width: 100%;
-  min-height: 124px;
+  min-height: 136px;
   flex: 1 0 auto;
-  padding: 10px 18px 8px;
+  padding: 10px 14px 8px;
   box-sizing: border-box;
   background-color: var(--bg-card);
   border-radius: 0;
-  gap: 12px;
+  gap: 0;
 }
 
 .sun-graphic {
   position: relative;
-  width: clamp(84px, 20vw, 108px);
-  height: clamp(84px, 20vw, 108px);
+  width: clamp(100px, 24vw, 126px);
+  height: clamp(100px, 24vw, 126px);
   aspect-ratio: 1 / 1;
   margin: 0 auto;
   display: flex;
@@ -3720,14 +3721,14 @@ select option {
   }
 }
 
-/* Ambient Temperature Visual Group (Left Column, Left-Aligned & Vertically Centered) */
+/* Ambient Temperature Visual Group (Left 50% Column, Centered Vertically & Horizontally) */
 .ambient-temp-group {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   margin: 0;
-  padding-left: 6px;
+  padding: 0;
   position: relative;
   z-index: 2;
   width: 100%;
@@ -3737,7 +3738,7 @@ select option {
 .ambient-temperature {
   display: flex;
   align-items: baseline;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 3px;
   line-height: 1;
   margin: 0;
@@ -3745,7 +3746,7 @@ select option {
 }
 
 .ambient-temperature .temp-num {
-  font-size: clamp(2.05rem, 5.2vw, 2.75rem);
+  font-size: clamp(2.35rem, 6vw, 3.15rem);
   font-weight: 900;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -3755,7 +3756,7 @@ select option {
 }
 
 .ambient-temperature .temp-unit {
-  font-size: clamp(1.1rem, 2.4vw, 1.4rem);
+  font-size: clamp(1.25rem, 2.8vw, 1.6rem);
   font-weight: 700;
   color: var(--sun-accent, #f59e0b);
   font-family: var(--font-mono);
@@ -3763,13 +3764,13 @@ select option {
 }
 
 .ambient-label {
-  font-size: clamp(0.6rem, 1.2vw, 0.68rem);
+  font-size: clamp(0.62rem, 1.3vw, 0.70rem);
   font-weight: 800;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.10em;
   color: var(--text-muted);
   margin-top: 6px;
   text-transform: uppercase;
-  text-align: left;
+  text-align: center;
   line-height: 1.2;
   white-space: nowrap;
 }
