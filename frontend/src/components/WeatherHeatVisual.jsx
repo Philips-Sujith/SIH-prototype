@@ -8,6 +8,12 @@ import {
   Gauge
 } from 'lucide-react';
 import { getThermalIntensity } from '../utils/thermalColorRamp';
+import charNormalWebp from '../assets/character-normal.webp';
+import charHeatWebp from '../assets/character-heat.webp';
+import charNightWebp from '../assets/character-night.webp';
+import charNormalPng from '../assets/character-normal.png';
+import charHeatPng from '../assets/character-heat.png';
+import charNightPng from '../assets/character-night.png';
 
 /**
  * Determine if current local time is night in South India (IST).
@@ -243,6 +249,46 @@ export default function WeatherHeatVisual({ zone }) {
     }));
   }, []);
 
+  // Adaptive character presentation state:
+  // - State 1: Normal (low heat / comfortable)
+  // - State 2: Caution (moderate heat)
+  // - State 3: Danger (high heat)
+  // - State 4: Extreme/Severe (life-threatening heat stress)
+  // - Night: Sleep / pajama state
+  const characterState = useMemo(() => {
+    if (isNight) return 'night';
+    const cat = (zone?.category || '').toLowerCase();
+    const currentWbgt = wbgt ?? 26.0;
+    if (currentWbgt >= 35 || cat === 'severe' || cat === 'extreme') return 'severe';
+    if (currentWbgt >= 32 || cat === 'high' || cat === 'danger') return 'danger';
+    if (currentWbgt >= 28 || cat === 'caution' || cat === 'moderate') return 'caution';
+    return 'normal';
+  }, [isNight, zone?.category, wbgt]);
+
+  const isHeatState = characterState === 'severe' || characterState === 'danger';
+
+  const { characterWebp, characterPng, characterAlt } = useMemo(() => {
+    if (characterState === 'night') {
+      return {
+        characterWebp: charNightWebp,
+        characterPng: charNightPng,
+        characterAlt: 'Nighttime Sleep Character in Pajamas'
+      };
+    }
+    if (characterState === 'severe' || characterState === 'danger') {
+      return {
+        characterWebp: charHeatWebp,
+        characterPng: charHeatPng,
+        characterAlt: 'Heat-stressed Character Struggling with Thermal Fatigue'
+      };
+    }
+    return {
+      characterWebp: charNormalWebp,
+      characterPng: charNormalPng,
+      characterAlt: 'Comfortable Standing Character'
+    };
+  }, [characterState]);
+
   if (!zone) return null;
 
   return (
@@ -271,155 +317,76 @@ export default function WeatherHeatVisual({ zone }) {
           <div className="ambient-label">AMBIENT TEMPERATURE</div>
         </div>
 
-        {/* RIGHT COLUMN: Dynamic Sun Graphic & Animation */}
-        <div className="sun-graphic">
-          <svg 
-            className="sun-svg" 
-            viewBox="-64 -64 128 128" 
-            preserveAspectRatio="xMidYMid meet"
-            aria-hidden="true"
-          >
-            <defs>
-              {/* White-hot Solar Core to Thermal Rim Radial Gradient */}
-              <radialGradient id="sunCoreGradient" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor={dynamics.coreStop0} stopOpacity="1" />
-                <stop offset="35%" stopColor={dynamics.coreStop1} stopOpacity="0.96" />
-                <stop offset="70%" stopColor={dynamics.coreStop2} stopOpacity="0.92" />
-                <stop offset="100%" stopColor={dynamics.coreRim} stopOpacity="0.90" />
-              </radialGradient>
-
-              {/* Pulsing Solar Coronal Aura (Breathing Halo) */}
-              <radialGradient id="sunAuraGradient" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor={dynamics.haloColor} stopOpacity={dynamics.haloMaxOp} />
-                <stop offset="45%" stopColor={dynamics.haloColor} stopOpacity={Number(dynamics.haloMaxOp) * 0.45} />
-                <stop offset="80%" stopColor={dynamics.haloColor} stopOpacity={Number(dynamics.haloMaxOp) * 0.10} />
-                <stop offset="100%" stopColor={dynamics.haloColor} stopOpacity="0" />
-              </radialGradient>
-
-              {/* Convection Heat Distortion Line Gradient */}
-              <linearGradient id="heatHazeGrad" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor={dynamics.coreRim} stopOpacity="0" />
-                <stop offset="25%" stopColor={dynamics.coreRim} stopOpacity="0.35" />
-                <stop offset="50%" stopColor={dynamics.coreRim} stopOpacity="0.75" />
-                <stop offset="75%" stopColor={dynamics.coreRim} stopOpacity="0.35" />
-                <stop offset="100%" stopColor={dynamics.coreRim} stopOpacity="0" />
-              </linearGradient>
-            </defs>
-
-            {/* Layer 1: Outer Halo (Breathing effect strictly centered at 0, 0) */}
-            <circle 
-              cx="0" 
-              cy="0" 
-              r="49" 
-              fill="url(#sunAuraGradient)"
-            >
-              <animate 
-                attributeName="r" 
-                values={`${dynamics.haloMinR};${dynamics.haloMaxR};${dynamics.haloMinR}`} 
-                dur={dynamics.durCorona} 
-                repeatCount="indefinite" 
-              />
-              <animate 
-                attributeName="opacity" 
-                values={`${dynamics.haloMinOp};${dynamics.haloMaxOp};${dynamics.haloMinOp}`} 
-                dur={dynamics.durCorona} 
-                repeatCount="indefinite" 
-              />
-            </circle>
-
-            {/* Layer 2: Concentric Radiance Ring (centered at 0, 0) */}
-            <circle 
-              cx="0" 
-              cy="0" 
-              r="37" 
-              fill="none" 
-              stroke={dynamics.haloColor} 
-              strokeWidth="1.2" 
-              strokeOpacity="0.45" 
-              strokeDasharray="3 4"
-            >
-              <animate 
-                attributeName="stroke-opacity" 
-                values="0.30;0.55;0.30" 
-                dur={dynamics.durCorona} 
-                repeatCount="indefinite" 
-              />
-            </circle>
-
-            {/* Layer 3: Solar Rays (Slow continuous 360° rotation strictly centered around 0, 0) */}
-            <g>
-              <animateTransform 
-                attributeName="transform" 
-                type="rotate" 
-                from="0 0 0" 
-                to="360 0 0" 
-                dur={dynamics.durRays} 
-                repeatCount="indefinite" 
-              />
-              {rays.map(({ deg, isPrimary }, i) => (
-                <line
-                  key={i}
-                  x1="0"
-                  y1="-20"
-                  x2="0"
-                  y2={isPrimary ? dynamics.rayPrimaryLen : dynamics.raySecondaryLen}
-                  stroke={isPrimary ? dynamics.rayPrimary : dynamics.raySecondary}
-                  strokeWidth={isPrimary ? (dynamics.rayWidthPrimary || "2.4") : (dynamics.rayWidthSecondary || "1.6")}
+        {/* RIGHT COLUMN: Adaptive Thermal Character & Contextual Celestial Indicator */}
+        <div className="telemetry-character-scene">
+          {/* Small Contextual Celestial Indicator (Upper-Right) */}
+          <div className="celestial-badge" title={isNight ? 'Night Time (South India IST)' : 'Live Solar & Thermal Intensity'}>
+            {isNight ? (
+              <svg className="celestial-moon-svg" viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
+                <path
+                  d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+                  fill="#38bdf8"
+                  stroke="#7dd3fc"
+                  strokeWidth="1.5"
                   strokeLinecap="round"
-                  opacity={isPrimary ? dynamics.rayOpacityPrimary : dynamics.rayOpacitySecondary}
-                  transform={`rotate(${deg})`}
+                  strokeLinejoin="round"
                 />
-              ))}
-            </g>
+                <circle cx="18" cy="5" r="1.2" fill="#bae6fd" className="star-twinkle" />
+                <circle cx="14" cy="2.5" r="0.9" fill="#bae6fd" className="star-twinkle-delay" />
+              </svg>
+            ) : (
+              <svg className="celestial-sun-svg" viewBox="-16 -16 32 32" width="30" height="30" aria-hidden="true">
+                <circle cx="0" cy="0" r="7" fill={dynamics.accentColor || '#f59e0b'} />
+                {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => (
+                  <line
+                    key={deg}
+                    x1="0"
+                    y1="-9"
+                    x2="0"
+                    y2="-13"
+                    stroke={dynamics.accentColor || '#f59e0b'}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    transform={`rotate(${deg})`}
+                  />
+                ))}
+              </svg>
+            )}
+          </div>
 
-            {/* Layer 4: Solar Core Disk (Centered at 0, 0 with subtle brightness breathing and crisp boundary) */}
-            <circle 
-              cx="0" 
-              cy="0" 
-              r="20" 
-              fill="url(#sunCoreGradient)"
-              stroke={dynamics.coreRim}
-              strokeWidth={dynamics.isNight ? "1.2" : "0.5"}
-              strokeOpacity={dynamics.isNight ? "0.95" : "0.6"}
-            >
-              <animate 
-                attributeName="opacity" 
-                values="0.94;1;0.94" 
-                dur={dynamics.durDisk} 
-                repeatCount="indefinite" 
-              />
-            </circle>
+          {/* Full-Body Character Representation with Dynamic State */}
+          <div className={`character-wrapper state-${characterState}`}>
+            {/* Animated sleep Zzz effect for night state */}
+            {isNight && (
+              <div className="sleep-z-container" aria-hidden="true">
+                <span className="sleep-z z-1">z</span>
+                <span className="sleep-z z-2">z</span>
+                <span className="sleep-z z-3">Z</span>
+              </div>
+            )}
 
-            {/* Layer 5: Symmetrically Centered Heat Shimmer Lines */}
-            <g className="anim-heat-shimmer">
-              <path 
-                className="heat-wave-line wave-1"
-                d="M -36 40 Q -18 37, 0 40 T 36 40" 
-                fill="none" 
-                stroke="url(#heatHazeGrad)" 
-                strokeWidth="1.3" 
-                strokeLinecap="round"
+            {/* Animated sweat droplets for heat state */}
+            {isHeatState && (
+              <div className="sweat-drops-container" aria-hidden="true">
+                <span className="sweat-drop drop-1">💧</span>
+                <span className="sweat-drop drop-2">💧</span>
+              </div>
+            )}
+
+            {/* Responsive Picture with WebP and PNG Fallback */}
+            <picture className="character-picture">
+              <source srcSet={characterWebp} type="image/webp" />
+              <img
+                src={characterPng}
+                alt={characterAlt}
+                className={`telemetry-character-img anim-${characterState}`}
+                loading="eager"
               />
-              <path 
-                className="heat-wave-line wave-2"
-                d="M -30 46 Q -15 49, 0 46 T 30 46" 
-                fill="none" 
-                stroke="url(#heatHazeGrad)" 
-                strokeWidth="1.4" 
-                strokeLinecap="round"
-                opacity="0.85"
-              />
-              <path 
-                className="heat-wave-line wave-3"
-                d="M -24 52 Q -12 50, 0 52 T 24 52" 
-                fill="none" 
-                stroke="url(#heatHazeGrad)" 
-                strokeWidth="1.2" 
-                strokeLinecap="round"
-                opacity="0.65"
-              />
-            </g>
-          </svg>
+            </picture>
+
+            {/* Soft Ground Shadow for realism */}
+            <div className="character-ground-shadow" aria-hidden="true" />
+          </div>
         </div>
       </div>
 

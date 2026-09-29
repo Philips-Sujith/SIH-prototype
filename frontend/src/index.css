@@ -3583,7 +3583,7 @@ select option {
   overflow: hidden;
 }
 
-/* Dedicated Layout Container for Sun + Temperature: Exact 50/50 Horizontal Split */
+/* Dedicated Layout Container for Character + Temperature: Exact 50/50 Horizontal Split */
 .temperature-section,
 .solar-visualization {
   display: grid;
@@ -3593,131 +3593,298 @@ select option {
   position: relative;
   overflow: hidden;
   width: 100%;
-  min-height: 148px;
+  min-height: 168px;
   flex: 1 0 auto;
-  padding: 10px 14px 8px;
+  padding: 10px 14px 6px;
   box-sizing: border-box;
   background-color: var(--bg-card);
   border-radius: 0;
   gap: 0;
 }
 
-.sun-graphic {
+/* Character Scene in Right 50% */
+.telemetry-character-scene {
   position: relative;
-  width: clamp(112px, 26vw, 142px);
-  height: clamp(112px, 26vw, 142px);
-  aspect-ratio: 1 / 1;
-  margin: 0 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  flex-shrink: 0;
-  z-index: 1;
-}
-
-.sun-svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-  margin: 0 auto;
   overflow: visible;
 }
 
-/* 4 Independent Animation Layers */
-
-/* Layer 1: Solar Disk (Very subtle brightness pulse) */
-.anim-solar-disk {
-  animation: solarDiskBrightnessPulse var(--dur-disk, 4.5s) ease-in-out infinite alternate;
-  transform-origin: 0 0;
-  filter: drop-shadow(0 0 12px rgba(255, 180, 50, 0.45));
+/* Small Contextual Celestial Indicator (Upper-Right) */
+.celestial-badge {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+  pointer-events: none;
 }
 
-@keyframes solarDiskBrightnessPulse {
+.celestial-sun-svg {
+  animation: smallSunRotate 30s linear infinite;
+  display: block;
+}
+
+@keyframes smallSunRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.celestial-moon-svg {
+  animation: moonGlowPulse 4s ease-in-out infinite alternate;
+  display: block;
+}
+
+@keyframes moonGlowPulse {
+  0% { filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.4)); }
+  100% { filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.8)); }
+}
+
+.star-twinkle {
+  animation: starTwinkleAnim 2.4s ease-in-out infinite alternate;
+}
+.star-twinkle-delay {
+  animation: starTwinkleAnim 2.4s ease-in-out infinite alternate;
+  animation-delay: 1.2s;
+}
+
+@keyframes starTwinkleAnim {
+  0% { opacity: 0.25; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1.2); }
+}
+
+/* Character Wrapper & Picture */
+.character-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  margin: 0 auto;
+}
+
+.character-picture {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.telemetry-character-img {
+  height: clamp(135px, 28vw, 158px);
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.35));
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  transform-origin: bottom center;
+}
+
+/* Character Breathing & Subtle Sway Animations */
+.telemetry-character-img.anim-normal {
+  animation: charBreatheNormal 3.6s ease-in-out infinite alternate;
+}
+
+@keyframes charBreatheNormal {
   0% {
-    filter: brightness(0.96) drop-shadow(0 0 10px rgba(255, 180, 50, 0.35));
+    transform: scale(1) translateY(0) rotate(0deg);
   }
   50% {
-    filter: brightness(1.08) drop-shadow(0 0 16px rgba(255, 180, 50, 0.60));
+    transform: scale(1.012, 1.018) translateY(-1px) rotate(0.4deg);
   }
   100% {
-    filter: brightness(0.96) drop-shadow(0 0 10px rgba(255, 180, 50, 0.35));
+    transform: scale(1) translateY(0) rotate(0deg);
   }
 }
 
-/* Layer 2: Rays (Slow continuous rotation) */
-.anim-solar-rays {
-  animation: solarRaySlowRotate var(--dur-rays, 36s) linear infinite;
-  transform-origin: 0 0;
+.telemetry-character-img.anim-caution {
+  animation: charBreatheCaution 3.2s ease-in-out infinite alternate;
 }
 
-@keyframes solarRaySlowRotate {
+@keyframes charBreatheCaution {
   0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-/* Layer 3: Outer Halo (Gentle breathing effect) */
-.anim-solar-halo {
-  animation: solarHaloBreathing var(--dur-corona, 4.8s) ease-in-out infinite alternate;
-  transform-origin: 0 0;
-}
-
-.anim-solar-ring {
-  animation: solarRingBreathing var(--dur-corona, 4.8s) ease-in-out infinite alternate;
-  transform-origin: 0 0;
-}
-
-@keyframes solarHaloBreathing {
-  0% {
-    transform: scale(0.94);
-    opacity: 0.65;
-  }
-  100% {
-    transform: scale(var(--pulse-scale, 1.08));
-    opacity: 1.0;
-  }
-}
-
-@keyframes solarRingBreathing {
-  0% {
-    transform: scale(0.96) rotate(0deg);
-    opacity: 0.35;
-  }
-  100% {
-    transform: scale(1.04) rotate(10deg);
-    opacity: 0.65;
-  }
-}
-
-/* Layer 4: Heat Shimmer (Very subtle animated distortion underneath) */
-.anim-heat-shimmer .heat-wave-line {
-  animation: heatShimmerDistort var(--dur-waves, 6.0s) ease-in-out infinite alternate;
-}
-
-.anim-heat-shimmer .heat-wave-line.wave-2 {
-  animation-delay: -2s;
-}
-
-.anim-heat-shimmer .heat-wave-line.wave-3 {
-  animation-delay: -4s;
-}
-
-@keyframes heatShimmerDistort {
-  0% {
-    transform: translateX(-3px);
-    opacity: 0.35;
+    transform: scale(1) translateY(0);
   }
   50% {
-    transform: translateX(3px);
-    opacity: 0.80;
+    transform: scale(1.015, 1.02) translateY(-1px);
   }
   100% {
-    transform: translateX(-3px);
-    opacity: 0.35;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.telemetry-character-img.anim-danger {
+  animation: charBreatheDanger 2.6s ease-in-out infinite alternate;
+}
+
+@keyframes charBreatheDanger {
+  0% {
+    transform: scale(1) translateY(0) rotate(-0.3deg);
+  }
+  50% {
+    transform: scale(1.015, 1.025) translateY(1px) rotate(0.3deg);
+  }
+  100% {
+    transform: scale(1) translateY(0) rotate(-0.3deg);
+  }
+}
+
+.telemetry-character-img.anim-severe {
+  animation: charBreatheSevere 2.2s ease-in-out infinite alternate;
+}
+
+@keyframes charBreatheSevere {
+  0% {
+    transform: scale(1) translateY(0) rotate(-0.5deg);
+    filter: drop-shadow(0 4px 14px rgba(220, 38, 38, 0.25));
+  }
+  50% {
+    transform: scale(1.02, 1.03) translateY(1.5px) rotate(0.5deg);
+    filter: drop-shadow(0 4px 16px rgba(239, 68, 68, 0.4));
+  }
+  100% {
+    transform: scale(1) translateY(0) rotate(-0.5deg);
+    filter: drop-shadow(0 4px 14px rgba(220, 38, 38, 0.25));
+  }
+}
+
+.telemetry-character-img.anim-night {
+  animation: charBreatheNight 4.8s ease-in-out infinite alternate;
+}
+
+@keyframes charBreatheNight {
+  0% {
+    transform: scale(1) translateY(0) rotate(0deg);
+    filter: drop-shadow(0 4px 14px rgba(56, 189, 248, 0.2));
+  }
+  50% {
+    transform: scale(1.01, 1.015) translateY(-1px) rotate(0.6deg);
+    filter: drop-shadow(0 4px 16px rgba(56, 189, 248, 0.35));
+  }
+  100% {
+    transform: scale(1) translateY(0) rotate(0deg);
+    filter: drop-shadow(0 4px 14px rgba(56, 189, 248, 0.2));
+  }
+}
+
+/* Ground Shadow */
+.character-ground-shadow {
+  width: 60px;
+  height: 8px;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.2) 40%, transparent 75%);
+  border-radius: 50%;
+  margin: -2px auto 0;
+  pointer-events: none;
+}
+
+/* Night Floating Zzz Animation */
+.sleep-z-container {
+  position: absolute;
+  top: 10px;
+  right: -8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.sleep-z {
+  color: #7dd3fc;
+  font-family: var(--font-mono);
+  font-weight: 900;
+  opacity: 0;
+  text-shadow: 0 0 6px rgba(56, 189, 248, 0.8);
+}
+
+.sleep-z.z-1 {
+  font-size: 0.75rem;
+  animation: floatZ 3.6s ease-in-out infinite;
+}
+
+.sleep-z.z-2 {
+  font-size: 0.95rem;
+  animation: floatZ 3.6s ease-in-out infinite;
+  animation-delay: 1.2s;
+  margin-left: 8px;
+}
+
+.sleep-z.z-3 {
+  font-size: 1.15rem;
+  animation: floatZ 3.6s ease-in-out infinite;
+  animation-delay: 2.4s;
+  margin-left: 14px;
+}
+
+@keyframes floatZ {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) translateX(0) scale(0.6);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.7;
+    transform: translateY(-22px) translateX(10px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px) translateX(14px) scale(1.2);
+  }
+}
+
+/* Heat Sweat Droplets Animation */
+.sweat-drops-container {
+  position: absolute;
+  top: 24px;
+  left: 4px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.sweat-drop {
+  position: absolute;
+  font-size: 0.85rem;
+  animation: sweatDropDrip 2.2s ease-in infinite;
+  opacity: 0;
+}
+
+.sweat-drop.drop-1 {
+  top: 0;
+  left: 0;
+  animation-delay: 0.3s;
+}
+
+.sweat-drop.drop-2 {
+  top: 12px;
+  right: -24px;
+  animation-delay: 1.4s;
+}
+
+@keyframes sweatDropDrip {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.7);
+  }
+  35% {
+    opacity: 0.95;
+    transform: translateY(2px) scale(1);
+  }
+  80% {
+    opacity: 0.7;
+    transform: translateY(14px) scale(0.9);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.5);
   }
 }
 
