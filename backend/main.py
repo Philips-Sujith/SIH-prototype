@@ -61,6 +61,8 @@ load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR.parent / ".env")
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct").strip()
+if not HF_MODEL_ID or "Phi-3" in HF_MODEL_ID or "phi-3" in HF_MODEL_ID.lower():
+    HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
 
 app = FastAPI(
     title="ClimateGuard India API",
@@ -311,7 +313,8 @@ async def health_check():
         },
         "weather_source": "Open-Meteo",
         "boundary_source": "Government Administrative Boundary Geospatial Datasets",
-        "cache_active": (time.time() - DISTRICTS_CACHE["timestamp"]) < CACHE_TTL_SECONDS
+        "cache_active": (time.time() - DISTRICTS_CACHE["timestamp"]) < CACHE_TTL_SECONDS,
+        "hf_model": HF_MODEL_ID
     }
 
 
