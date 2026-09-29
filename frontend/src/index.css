@@ -692,7 +692,7 @@ html, body {
 
 .bullet-value {
   font-size: 0.90rem;
-  color: #f1f5f9;
+  color: var(--text-primary);
   font-weight: 400;
   line-height: 1.5;
 }
@@ -700,6 +700,15 @@ html, body {
 .bulletin-item.highlight-action .action-text {
   color: #7dd3fc;
   font-weight: 600;
+}
+
+/* Light Theme Contrast Refinements for Bulletin */
+[data-theme="light"] .bulletin-item {
+  border-bottom-color: var(--border-subtle);
+}
+
+[data-theme="light"] .bulletin-item.highlight-action .action-text {
+  color: var(--accent-hover);
 }
 
 .bulletin-item.peak-time {
