@@ -11,18 +11,26 @@ import { getThermalIntensity } from '../utils/thermalColorRamp';
 
 /**
  * Determine if current local time is night in South India (IST).
- * Night hours: 6:30 PM (18:30) or later, OR before 6:00 AM (06:00).
- * Prioritizes district observation_time if available, with live client-clock fallback in Asia/Kolkata.
+ * Night hours: 6:30 PM (18:30) or later, OR before 6:00 AM (06:00) IST.
+ * Evaluates live Indian Standard Time (Asia/Kolkata).
+ * Supports window.__CLIMATEGUARD_TIME_OVERRIDE__ for testing/simulation.
  */
-function checkIsNightTime(observationTime) {
+function checkIsNightTime(customTime = null) {
   try {
     let date = new Date();
-    if (observationTime && typeof observationTime === 'string') {
-      const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(observationTime);
-      date = hasTimezone
-        ? new Date(observationTime)
-        : new Date(`${observationTime}+05:30`);
-      if (Number.isNaN(date.getTime())) date = new Date();
+
+    // Support optional global devtools simulation override (e.g. window.__CLIMATEGUARD_TIME_OVERRIDE__ = '14:00')
+    if (typeof window !== 'undefined' && window.__CLIMATEGUARD_TIME_OVERRIDE__) {
+      customTime = window.__CLIMATEGUARD_TIME_OVERRIDE__;
+    }
+
+    if (customTime instanceof Date) {
+      date = customTime;
+    } else if (typeof customTime === 'string') {
+      const parsed = new Date(customTime);
+      if (!Number.isNaN(parsed.getTime())) {
+        date = parsed;
+      }
     }
 
     const formatter = new Intl.DateTimeFormat('en-US', {
@@ -35,6 +43,7 @@ function checkIsNightTime(observationTime) {
     const hour = parseInt(parts.find((p) => p.type === 'hour')?.value || '12', 10);
     const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
     const totalMinutes = hour * 60 + minute;
+    // Night hours: 6:30 PM (18:30) or later, OR before 6:00 AM (06:00) IST
     return totalMinutes >= 18 * 60 + 30 || totalMinutes < 6 * 60;
   } catch {
     const now = new Date();
@@ -188,17 +197,30 @@ export default function WeatherHeatVisual({ zone }) {
   const utci = rawUtci != null ? Number(rawUtci) : null;
   const heatStressScore = rawHss != null ? Number(rawHss) : (wbgt != null ? Math.min(100, Math.round(wbgt * 2.2)) : null);
 
-  // Automatic real-time day/night detection with 30s interval for live boundary transitions
-  // Prioritizes district observation_time, falling back to browser India time (Asia/Kolkata)
-  const [isNight, setIsNight] = useState(() => checkIsNightTime(zone?.observation_time));
+  // Automatic real-time day/night detection with recurring interval
+  // Evaluates live Indian Standard Time (Asia/Kolkata) every 30s so the sun transitions smoothly at 6:30 PM & 6:00 AM
+  const [isNight, setIsNight] = useState(() => checkIsNightTime());
 
   useEffect(() => {
-    setIsNight(checkIsNightTime(zone?.observation_time));
-    const timer = setInterval(() => {
-      setIsNight(checkIsNightTime(zone?.observation_time));
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [zone?.observation_time]);
+    const updateNightState = () => {
+      setIsNight(checkIsNightTime());
+    };
+
+    updateNightState();
+    const timer = setInterval(updateNightState, 30000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        updateNightState();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   // Continuous Sun dynamics:
   // - Real/cached data: daytime severity colors vs night electric blue

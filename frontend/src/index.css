@@ -3565,7 +3565,7 @@ select option {
 }
 
 .telemetry-header {
-  padding: 12px 18px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
@@ -3593,9 +3593,9 @@ select option {
   position: relative;
   overflow: hidden;
   width: 100%;
-  min-height: 224px;
+  min-height: 140px;
   flex: 1 0 auto;
-  padding: 16px 20px 14px;
+  padding: 8px 16px 6px;
   box-sizing: border-box;
   background-color: var(--bg-card);
   border-radius: 0;
@@ -3604,8 +3604,8 @@ select option {
 
 .sun-graphic {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 86px;
+  height: 86px;
   aspect-ratio: 1 / 1;
   margin: 0 auto;
   display: flex;
@@ -3617,8 +3617,8 @@ select option {
 }
 
 .sun-svg {
-  width: 120px;
-  height: 120px;
+  width: 86px;
+  height: 86px;
   display: block;
   margin: 0 auto;
   overflow: visible;
@@ -3727,7 +3727,7 @@ select option {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  margin-top: 8px;
+  margin-top: 4px;
   position: relative;
   z-index: 2;
   width: 100%;
@@ -3746,7 +3746,7 @@ select option {
 }
 
 .ambient-temperature .temp-num {
-  font-size: 2.25rem; /* ~31px */
+  font-size: 1.85rem;
   font-weight: 900;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -3756,7 +3756,7 @@ select option {
 }
 
 .ambient-temperature .temp-unit {
-  font-size: 1.25rem;
+  font-size: 1.05rem;
   font-weight: 700;
   color: var(--sun-accent, #f59e0b);
   font-family: var(--font-mono);
@@ -3764,11 +3764,11 @@ select option {
 }
 
 .ambient-label {
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   font-weight: 800;
   letter-spacing: 0.10em;
   color: var(--text-muted);
-  margin-top: 5px;
+  margin-top: 2px;
   text-transform: uppercase;
   text-align: center;
   line-height: 1.2;
@@ -3793,7 +3793,7 @@ select option {
   display: grid;
   grid-template-columns: 1fr auto 1fr auto 1fr;
   align-items: center;
-  padding: 10px 18px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -3801,7 +3801,7 @@ select option {
   display: grid;
   grid-template-columns: 1fr auto 1fr auto 1fr;
   align-items: center;
-  padding: 8px 18px;
+  padding: 5px 14px;
 }
 
 .metric-cell, .secondary-cell {
@@ -3809,20 +3809,20 @@ select option {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
 }
 
 .metric-cell-top, .sec-label-group {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .metric-cell-label, .sec-label {
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   font-weight: 700;
   color: var(--text-muted);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
@@ -3833,7 +3833,7 @@ select option {
 }
 
 .metric-num {
-  font-size: 1.35rem; /* ~22px */
+  font-size: 1.18rem;
   font-weight: 800;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -3841,17 +3841,17 @@ select option {
 }
 
 .metric-cell.highlight-cell .metric-num {
-  font-size: 1.45rem; /* ~24px */
+  font-size: 1.25rem;
 }
 
 .metric-unit, .sec-unit {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
 }
 
 .sec-num {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 800;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -3859,7 +3859,7 @@ select option {
 
 .metric-divider {
   width: 1px;
-  height: 26px;
+  height: 20px;
   background: var(--border-subtle);
 }
 

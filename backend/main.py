@@ -116,6 +116,7 @@ SPATIAL_CACHE: Dict[str, Any] = {
     "data": None
 }
 FRESH_CACHE_TTL_SECONDS = 1800  # 30 minutes for LIVE state
+CACHE_TTL_SECONDS = 1800        # Standard cache TTL
 MAX_CACHE_TTL_SECONDS = 86400   # 24 hours before UNAVAILABLE
 UPSTREAM_429_COOLDOWN_SECONDS = 600  # 10 minutes cooldown on HTTP 429
 UPSTREAM_ERROR_COOLDOWN_SECONDS = 60  # 1 minute cooldown on other errors

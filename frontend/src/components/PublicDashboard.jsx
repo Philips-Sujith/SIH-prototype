@@ -287,6 +287,44 @@ export default function PublicDashboard({
           </div>
         </section>
 
+        {/* Live Thermal Telemetry Card with Manual Refresh Button */}
+        <section className="dashboard-card stat-card telemetry-card" aria-label="Thermal Stress Telemetry">
+          <div className="card-header telemetry-header">
+            <div className="card-title-group">
+              <Thermometer size={16} style={{ color: 'var(--accent-primary)' }} />
+              <span className="card-title">LIVE DISTRICT THERMAL TELEMETRY</span>
+            </div>
+            
+            {/* Manual Refresh Button & Status Indicator */}
+            <div className="telemetry-header-controls">
+              {refreshStatus ? (
+                <span className={`refresh-feedback-text ${refreshStatus.includes('failed') ? 'error' : 'success'}`}>
+                  {refreshStatus}
+                </span>
+              ) : (
+                <span className="telemetry-source-meta">
+                  Open-Meteo Feed {lastUpdated ? `• ${lastUpdated}` : ''}
+                </span>
+              )}
+              <button 
+                id="telemetry-refresh-btn"
+                className={`manual-refresh-icon-btn ${isRefreshing ? 'refreshing' : ''}`}
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                title="Refresh live district telemetry from Open-Meteo"
+              >
+                <RotateCw size={13} className={isRefreshing ? 'spin-icon' : ''} />
+              </button>
+            </div>
+          </div>
+
+          {/* Dynamic Sun / Thermal Centerpiece & Weather Values */}
+          <WeatherHeatVisual
+            zone={selectedZone}
+            compact={true}
+          />
+        </section>
+
         {/* Profile-Specific Heat Health Impact Card with Scrollable Bulletin */}
         <section 
           className="dashboard-card impact-bulletin-card"
@@ -436,44 +474,6 @@ export default function PublicDashboard({
             </ul>
           </section>
         )}
-
-        {/* Live Thermal Telemetry Card with Manual Refresh Button */}
-        <section className="dashboard-card stat-card telemetry-card" aria-label="Thermal Stress Telemetry">
-          <div className="card-header telemetry-header">
-            <div className="card-title-group">
-              <Thermometer size={16} style={{ color: 'var(--accent-primary)' }} />
-              <span className="card-title">LIVE DISTRICT THERMAL TELEMETRY</span>
-            </div>
-            
-            {/* Manual Refresh Button & Status Indicator */}
-            <div className="telemetry-header-controls">
-              {refreshStatus ? (
-                <span className={`refresh-feedback-text ${refreshStatus.includes('failed') ? 'error' : 'success'}`}>
-                  {refreshStatus}
-                </span>
-              ) : (
-                <span className="telemetry-source-meta">
-                  Open-Meteo Feed {lastUpdated ? `• ${lastUpdated}` : ''}
-                </span>
-              )}
-              <button 
-                id="telemetry-refresh-btn"
-                className={`manual-refresh-icon-btn ${isRefreshing ? 'refreshing' : ''}`}
-                onClick={handleManualRefresh}
-                disabled={isRefreshing}
-                title="Refresh live district telemetry from Open-Meteo"
-              >
-                <RotateCw size={13} className={isRefreshing ? 'spin-icon' : ''} />
-              </button>
-            </div>
-          </div>
-
-          {/* Dynamic Sun / Thermal Centerpiece & Weather Values */}
-          <WeatherHeatVisual
-            zone={selectedZone}
-            compact={true}
-          />
-        </section>
 
       </div>
 
