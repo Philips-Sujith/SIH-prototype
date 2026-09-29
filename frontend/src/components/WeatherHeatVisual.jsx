@@ -262,6 +262,16 @@ export default function WeatherHeatVisual({ zone }) {
           '--sun-accent': dynamics.accentColor
         }}
       >
+        {/* LEFT COLUMN: Temperature value and AMBIENT TEMPERATURE subtitle */}
+        <div className="ambient-temp-group">
+          <div className="ambient-temperature">
+            <span className="temp-num">{temp != null ? temp.toFixed(1) : '—'}</span>
+            {temp != null && <span className="temp-unit">°C</span>}
+          </div>
+          <div className="ambient-label">AMBIENT TEMPERATURE</div>
+        </div>
+
+        {/* RIGHT COLUMN: Dynamic Sun Graphic & Animation */}
         <div className="sun-graphic">
           <svg 
             className="sun-svg" 
@@ -410,15 +420,6 @@ export default function WeatherHeatVisual({ zone }) {
               />
             </g>
           </svg>
-        </div>
-
-        {/* Visual Group: Temperature value and AMBIENT TEMPERATURE label */}
-        <div className="ambient-temp-group">
-          <div className="ambient-temperature">
-            <span className="temp-num">{temp != null ? temp.toFixed(1) : '—'}</span>
-            {temp != null && <span className="temp-unit">°C</span>}
-          </div>
-          <div className="ambient-label">AMBIENT TEMPERATURE</div>
         </div>
       </div>
 
