@@ -60,7 +60,7 @@ ALERT_LOG_FILE = BASE_DIR / "alerts.log"
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR.parent / ".env")
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "microsoft/Phi-3-mini-4k-instruct").strip()
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct").strip()
 
 app = FastAPI(
     title="ClimateGuard India API",
@@ -810,49 +810,43 @@ async def get_district_advisory(district_id: str):
         f"Do not include intro/outro, only the 2-sentence advisory."
     )
 
-    hf_urls = [
-        f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_ID}",
-        f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
-    ]
-
+    hf_url = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 100,
-            "temperature": 0.4,
-            "return_full_text": False
-        }
+        "model": HF_MODEL_ID,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 80,
+        "temperature": 0.4
     }
 
-    async with httpx.AsyncClient(timeout=3.0) as client:
-        for url in hf_urls:
-            try:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    ai_text = ""
-                    if isinstance(data, list) and len(data) > 0:
-                        ai_text = data[0].get("generated_text", "").strip()
-                    elif isinstance(data, dict):
-                        ai_text = data.get("generated_text", "").strip()
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(hf_url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                ai_text = ""
+                if choices and isinstance(choices, list) and len(choices) > 0:
+                    ai_text = choices[0].get("message", {}).get("content", "").strip()
 
-                    if ai_text:
-                        return {
-                            "district_id": d_id_clean,
-                            "zone_id": d_id_clean,
-                            "district_name": name,
-                            "zone_name": name,
-                            "category": category,
-                            "advisory": ai_text,
-                            "source": "huggingface_inference",
-                            "model": HF_MODEL_ID
-                        }
-            except Exception:
-                pass
+                if ai_text:
+                    return {
+                        "district_id": d_id_clean,
+                        "zone_id": d_id_clean,
+                        "district_name": name,
+                        "zone_name": name,
+                        "category": category,
+                        "advisory": ai_text,
+                        "source": "huggingface_inference",
+                        "model": HF_MODEL_ID
+                    }
+    except Exception as exc:
+        logger.warning(f"Error calling Hugging Face inference API for {d_id_clean}: {exc}")
 
     return {
         "district_id": d_id_clean,
