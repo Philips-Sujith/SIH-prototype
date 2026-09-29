@@ -1,11 +1,13 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { 
   Flame, 
   Droplets, 
   Activity, 
   Wind, 
   ThermometerSun,
-  Gauge
+  Gauge,
+  Sparkles,
+  ChevronDown
 } from 'lucide-react';
 import { getThermalIntensity } from '../utils/thermalColorRamp';
 import charNormalWebp from '../assets/character-normal.webp';
@@ -66,16 +68,14 @@ function checkIsNightTime(customTime = null) {
  * - Day Mode: Warm gold at Low (<28°C), amber/yellow at Caution (28-30°C), orange at Danger (30-32°C), orange-red at Extreme (32-35°C), deep crimson at Severe (>35°C).
  * Glow radius/opacity, ray intensity, and shimmer strength scale proportionally from numeric intensity (0-1).
  */
-function getSunDynamics(wbgtValue, tempValue, isNight = false) {
+function getSunDynamics(wbgtValue, _tempValue, isNight = false) {
   const wbgt = Number(wbgtValue ?? 29.5);
-  const temp = Number(tempValue ?? 32.0);
   const intensity = getThermalIntensity(wbgt); // 0.0 (<=24°C) to 1.0 (>=38°C)
 
   // Night Mode: fixed vibrant electric blue palette that visually reads as "cool/night mode"
   if (isNight) {
     const nightBlue = '#0284c7';     // Rich saturated electric azure blue
     const darkEdge = '#0369a1';      // Defined boundary stop
-    const electricBlue = '#0ea5e9';  // Saturated blue
     const brightCyan = '#38bdf8';    // Vibrant cyan-blue
     const skyCore = '#bae6fd';       // Crisp radiant core stop
 
@@ -241,21 +241,32 @@ export default function WeatherHeatVisual({ zone }) {
     return getSunDynamics(wbgt, temp, isNight);
   }, [hasTelemetry, wbgt, temp, isNight]);
 
-  // 16 evenly spaced rays (8 primary, 8 secondary) strictly at 22.5° intervals around center (0,0)
-  const rays = useMemo(() => {
-    return Array.from({ length: 16 }, (_, i) => ({
-      deg: i * 22.5,
-      isPrimary: i % 2 === 0
-    }));
-  }, []);
+  // Demo Mode for presentation testing (overrides only visual character & celestial badge)
+  const [demoState, setDemoState] = useState(null); // null = Live, 'normal', 'caution', 'danger', 'severe', 'night'
+  const [demoOpen, setDemoOpen] = useState(false);
+  const demoRef = useRef(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (demoRef.current && !demoRef.current.contains(e.target)) {
+        setDemoOpen(false);
+      }
+    };
+    if (demoOpen) {
+      document.addEventListener('pointerdown', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsideClick);
+    };
+  }, [demoOpen]);
+
+  // Determine effective night status (if demo state selected, 'night' forces night, others daytime)
+  const effectiveIsNight = demoState ? demoState === 'night' : isNight;
 
   // Adaptive character presentation state:
-  // - State 1: Normal (low heat / comfortable)
-  // - State 2: Caution (moderate heat)
-  // - State 3: Danger (high heat)
-  // - State 4: Extreme/Severe (life-threatening heat stress)
-  // - Night: Sleep / pajama state
+  // Priority: Demo override -> Actual thermal state -> Actual day/night state
   const characterState = useMemo(() => {
+    if (demoState) return demoState;
     if (isNight) return 'night';
     const cat = (zone?.category || '').toLowerCase();
     const currentWbgt = wbgt ?? 26.0;
@@ -263,9 +274,20 @@ export default function WeatherHeatVisual({ zone }) {
     if (currentWbgt >= 32 || cat === 'high' || cat === 'danger') return 'danger';
     if (currentWbgt >= 28 || cat === 'caution' || cat === 'moderate') return 'caution';
     return 'normal';
-  }, [isNight, zone?.category, wbgt]);
+  }, [demoState, isNight, zone?.category, wbgt]);
 
   const isHeatState = characterState === 'severe' || characterState === 'danger';
+
+  // Contextual sun color: demo override vs live calculated dynamics
+  const effectiveCelestialColor = useMemo(() => {
+    if (demoState) {
+      if (demoState === 'severe') return '#dc2626';
+      if (demoState === 'danger') return '#ea580c';
+      if (demoState === 'caution') return '#f59e0b';
+      return '#eab308';
+    }
+    return dynamics.accentColor || '#f59e0b';
+  }, [demoState, dynamics.accentColor]);
 
   const { characterWebp, characterPng, characterAlt } = useMemo(() => {
     if (characterState === 'night') {
@@ -293,15 +315,6 @@ export default function WeatherHeatVisual({ zone }) {
 
   return (
     <div className="telemetry-content-wrapper">
-      {/* 
-        TASK 1 ARCHITECTURE:
-        <SolarVisualization> (flex column, align-items: center, min-height ~195px)
-          <SunGraphic />                  <!-- fixed square 128x128 bounding box, 100% symmetric -->
-          <div className="solar-gap" />   <!-- deliberate 14px small gap -->
-          <AmbientTemperature />          <!-- 25.9°C shared center axis -->
-          <AmbientLabel />                <!-- AMBIENT TEMPERATURE -->
-        </SolarVisualization>
-      */}
       <div 
         className="solar-visualization temperature-section"
         style={{
@@ -319,9 +332,72 @@ export default function WeatherHeatVisual({ zone }) {
 
         {/* RIGHT COLUMN: Adaptive Thermal Character & Contextual Celestial Indicator */}
         <div className="telemetry-character-scene">
+          {/* Small Unobtrusive DEMO MODE Selector */}
+          <div className="character-demo-control" ref={demoRef}>
+            <button
+              id="character-demo-btn"
+              type="button"
+              className={`demo-pill-btn ${demoState ? `active ${demoState}` : ''}`}
+              onClick={() => setDemoOpen((prev) => !prev)}
+              title="Demonstration state override for SIH presentation"
+              aria-label="Character presentation demo mode"
+            >
+              <Sparkles size={10} className="demo-sparkle-icon" />
+              <span>{demoState ? `DEMO: ${demoState === 'caution' ? 'MODERATE' : demoState === 'danger' ? 'HIGH' : demoState === 'severe' ? 'EXTREME' : demoState.toUpperCase()}` : 'DEMO'}</span>
+              <ChevronDown size={10} className={`demo-chevron ${demoOpen ? 'open' : ''}`} />
+            </button>
+
+            {demoOpen && (
+              <div className="demo-dropdown-menu" role="menu">
+                <button
+                  type="button"
+                  className={`demo-opt ${!demoState ? 'selected' : ''}`}
+                  onClick={() => { setDemoState(null); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">⚡</span> Live (Exit Demo)
+                </button>
+                <button
+                  type="button"
+                  className={`demo-opt ${demoState === 'normal' ? 'selected' : ''}`}
+                  onClick={() => { setDemoState('normal'); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">🟢</span> Normal
+                </button>
+                <button
+                  type="button"
+                  className={`demo-opt ${demoState === 'caution' ? 'selected' : ''}`}
+                  onClick={() => { setDemoState('caution'); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">🟡</span> Moderate
+                </button>
+                <button
+                  type="button"
+                  className={`demo-opt ${demoState === 'danger' ? 'selected' : ''}`}
+                  onClick={() => { setDemoState('danger'); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">🟠</span> High
+                </button>
+                <button
+                  type="button"
+                  className={`demo-opt ${demoState === 'severe' ? 'selected' : ''}`}
+                  onClick={() => { setDemoState('severe'); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">🔴</span> Extreme
+                </button>
+                <button
+                  type="button"
+                  className={`demo-opt ${demoState === 'night' ? 'selected' : ''}`}
+                  onClick={() => { setDemoState('night'); setDemoOpen(false); }}
+                >
+                  <span className="demo-opt-dot">🌙</span> Night
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Small Contextual Celestial Indicator (Upper-Right) */}
-          <div className="celestial-badge" title={isNight ? 'Night Time (South India IST)' : 'Live Solar & Thermal Intensity'}>
-            {isNight ? (
+          <div className="celestial-badge" title={effectiveIsNight ? 'Night Time Mode' : 'Live Solar & Thermal Intensity'}>
+            {effectiveIsNight ? (
               <svg className="celestial-moon-svg" viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
                 <path
                   d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
@@ -336,7 +412,7 @@ export default function WeatherHeatVisual({ zone }) {
               </svg>
             ) : (
               <svg className="celestial-sun-svg" viewBox="-16 -16 32 32" width="30" height="30" aria-hidden="true">
-                <circle cx="0" cy="0" r="7" fill={dynamics.accentColor || '#f59e0b'} />
+                <circle cx="0" cy="0" r="7" fill={effectiveCelestialColor} />
                 {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => (
                   <line
                     key={deg}
@@ -344,7 +420,7 @@ export default function WeatherHeatVisual({ zone }) {
                     y1="-9"
                     x2="0"
                     y2="-13"
-                    stroke={dynamics.accentColor || '#f59e0b'}
+                    stroke={effectiveCelestialColor}
                     strokeWidth="2"
                     strokeLinecap="round"
                     transform={`rotate(${deg})`}
@@ -357,7 +433,7 @@ export default function WeatherHeatVisual({ zone }) {
           {/* Full-Body Character Representation with Dynamic State */}
           <div className={`character-wrapper state-${characterState}`}>
             {/* Animated sleep Zzz effect for night state */}
-            {isNight && (
+            {effectiveIsNight && (
               <div className="sleep-z-container" aria-hidden="true">
                 <span className="sleep-z z-1">z</span>
                 <span className="sleep-z z-2">z</span>
