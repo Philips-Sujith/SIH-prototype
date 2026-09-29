@@ -1,21 +1,13 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { 
   Flame, 
   Droplets, 
   Activity, 
   Wind, 
   ThermometerSun,
-  Gauge,
-  Sparkles,
-  ChevronDown
+  Gauge
 } from 'lucide-react';
 import { getThermalIntensity } from '../utils/thermalColorRamp';
-import charNormalWebp from '../assets/character-normal.webp';
-import charHeatWebp from '../assets/character-heat.webp';
-import charNightWebp from '../assets/character-night.webp';
-import charNormalPng from '../assets/character-normal.png';
-import charHeatPng from '../assets/character-heat.png';
-import charNightPng from '../assets/character-night.png';
 
 /**
  * Determine if current local time is night in South India (IST).
@@ -68,14 +60,16 @@ function checkIsNightTime(customTime = null) {
  * - Day Mode: Warm gold at Low (<28°C), amber/yellow at Caution (28-30°C), orange at Danger (30-32°C), orange-red at Extreme (32-35°C), deep crimson at Severe (>35°C).
  * Glow radius/opacity, ray intensity, and shimmer strength scale proportionally from numeric intensity (0-1).
  */
-function getSunDynamics(wbgtValue, _tempValue, isNight = false) {
+function getSunDynamics(wbgtValue, tempValue, isNight = false) {
   const wbgt = Number(wbgtValue ?? 29.5);
+  const temp = Number(tempValue ?? 32.0);
   const intensity = getThermalIntensity(wbgt); // 0.0 (<=24°C) to 1.0 (>=38°C)
 
   // Night Mode: fixed vibrant electric blue palette that visually reads as "cool/night mode"
   if (isNight) {
     const nightBlue = '#0284c7';     // Rich saturated electric azure blue
     const darkEdge = '#0369a1';      // Defined boundary stop
+    const electricBlue = '#0ea5e9';  // Saturated blue
     const brightCyan = '#38bdf8';    // Vibrant cyan-blue
     const skyCore = '#bae6fd';       // Crisp radiant core stop
 
@@ -241,80 +235,27 @@ export default function WeatherHeatVisual({ zone }) {
     return getSunDynamics(wbgt, temp, isNight);
   }, [hasTelemetry, wbgt, temp, isNight]);
 
-  // Demo Mode for presentation testing (overrides only visual character & celestial badge)
-  const [demoState, setDemoState] = useState(null); // null = Live, 'normal', 'caution', 'danger', 'severe', 'night'
-  const [demoOpen, setDemoOpen] = useState(false);
-  const demoRef = useRef(null);
-
-  useEffect(() => {
-    const handleOutsideClick = (e) => {
-      if (demoRef.current && !demoRef.current.contains(e.target)) {
-        setDemoOpen(false);
-      }
-    };
-    if (demoOpen) {
-      document.addEventListener('pointerdown', handleOutsideClick);
-    }
-    return () => {
-      document.removeEventListener('pointerdown', handleOutsideClick);
-    };
-  }, [demoOpen]);
-
-  // Determine effective night status (if demo state selected, 'night' forces night, others daytime)
-  const effectiveIsNight = demoState ? demoState === 'night' : isNight;
-
-  // Adaptive character presentation state:
-  // Priority: Demo override -> Actual thermal state -> Actual day/night state
-  const characterState = useMemo(() => {
-    if (demoState) return demoState;
-    if (isNight) return 'night';
-    const cat = (zone?.category || '').toLowerCase();
-    const currentWbgt = wbgt ?? 26.0;
-    if (currentWbgt >= 35 || cat === 'severe' || cat === 'extreme') return 'severe';
-    if (currentWbgt >= 32 || cat === 'high' || cat === 'danger') return 'danger';
-    if (currentWbgt >= 28 || cat === 'caution' || cat === 'moderate') return 'caution';
-    return 'normal';
-  }, [demoState, isNight, zone?.category, wbgt]);
-
-  const isHeatState = characterState === 'severe' || characterState === 'danger';
-
-  // Contextual sun color: demo override vs live calculated dynamics
-  const effectiveCelestialColor = useMemo(() => {
-    if (demoState) {
-      if (demoState === 'severe') return '#dc2626';
-      if (demoState === 'danger') return '#ea580c';
-      if (demoState === 'caution') return '#f59e0b';
-      return '#eab308';
-    }
-    return dynamics.accentColor || '#f59e0b';
-  }, [demoState, dynamics.accentColor]);
-
-  const { characterWebp, characterPng, characterAlt } = useMemo(() => {
-    if (characterState === 'night') {
-      return {
-        characterWebp: charNightWebp,
-        characterPng: charNightPng,
-        characterAlt: 'Nighttime Sleep Character in Pajamas'
-      };
-    }
-    if (characterState === 'severe' || characterState === 'danger') {
-      return {
-        characterWebp: charHeatWebp,
-        characterPng: charHeatPng,
-        characterAlt: 'Heat-stressed Character Struggling with Thermal Fatigue'
-      };
-    }
-    return {
-      characterWebp: charNormalWebp,
-      characterPng: charNormalPng,
-      characterAlt: 'Comfortable Standing Character'
-    };
-  }, [characterState]);
+  // 16 evenly spaced rays (8 primary, 8 secondary) strictly at 22.5° intervals around center (0,0)
+  const rays = useMemo(() => {
+    return Array.from({ length: 16 }, (_, i) => ({
+      deg: i * 22.5,
+      isPrimary: i % 2 === 0
+    }));
+  }, []);
 
   if (!zone) return null;
 
   return (
     <div className="telemetry-content-wrapper">
+      {/* 
+        TASK 1 ARCHITECTURE:
+        <SolarVisualization> (flex column, align-items: center, min-height ~195px)
+          <SunGraphic />                  <!-- fixed square 128x128 bounding box, 100% symmetric -->
+          <div className="solar-gap" />   <!-- deliberate 14px small gap -->
+          <AmbientTemperature />          <!-- 25.9°C shared center axis -->
+          <AmbientLabel />                <!-- AMBIENT TEMPERATURE -->
+        </SolarVisualization>
+      */}
       <div 
         className="solar-visualization temperature-section"
         style={{
@@ -330,139 +271,155 @@ export default function WeatherHeatVisual({ zone }) {
           <div className="ambient-label">AMBIENT TEMPERATURE</div>
         </div>
 
-        {/* RIGHT COLUMN: Adaptive Thermal Character & Contextual Celestial Indicator */}
-        <div className="telemetry-character-scene">
-          {/* Small Unobtrusive DEMO MODE Selector */}
-          <div className="character-demo-control" ref={demoRef}>
-            <button
-              id="character-demo-btn"
-              type="button"
-              className={`demo-pill-btn ${demoState ? `active ${demoState}` : ''}`}
-              onClick={() => setDemoOpen((prev) => !prev)}
-              title="Demonstration state override for SIH presentation"
-              aria-label="Character presentation demo mode"
+        {/* RIGHT COLUMN: Dynamic Sun Graphic & Animation */}
+        <div className="sun-graphic">
+          <svg 
+            className="sun-svg" 
+            viewBox="-64 -64 128 128" 
+            preserveAspectRatio="xMidYMid meet"
+            aria-hidden="true"
+          >
+            <defs>
+              {/* White-hot Solar Core to Thermal Rim Radial Gradient */}
+              <radialGradient id="sunCoreGradient" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor={dynamics.coreStop0} stopOpacity="1" />
+                <stop offset="35%" stopColor={dynamics.coreStop1} stopOpacity="0.96" />
+                <stop offset="70%" stopColor={dynamics.coreStop2} stopOpacity="0.92" />
+                <stop offset="100%" stopColor={dynamics.coreRim} stopOpacity="0.90" />
+              </radialGradient>
+
+              {/* Pulsing Solar Coronal Aura (Breathing Halo) */}
+              <radialGradient id="sunAuraGradient" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor={dynamics.haloColor} stopOpacity={dynamics.haloMaxOp} />
+                <stop offset="45%" stopColor={dynamics.haloColor} stopOpacity={Number(dynamics.haloMaxOp) * 0.45} />
+                <stop offset="80%" stopColor={dynamics.haloColor} stopOpacity={Number(dynamics.haloMaxOp) * 0.10} />
+                <stop offset="100%" stopColor={dynamics.haloColor} stopOpacity="0" />
+              </radialGradient>
+
+              {/* Convection Heat Distortion Line Gradient */}
+              <linearGradient id="heatHazeGrad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor={dynamics.coreRim} stopOpacity="0" />
+                <stop offset="25%" stopColor={dynamics.coreRim} stopOpacity="0.35" />
+                <stop offset="50%" stopColor={dynamics.coreRim} stopOpacity="0.75" />
+                <stop offset="75%" stopColor={dynamics.coreRim} stopOpacity="0.35" />
+                <stop offset="100%" stopColor={dynamics.coreRim} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+
+            {/* Layer 1: Outer Halo (Breathing effect strictly centered at 0, 0) */}
+            <circle 
+              cx="0" 
+              cy="0" 
+              r="49" 
+              fill="url(#sunAuraGradient)"
             >
-              <Sparkles size={10} className="demo-sparkle-icon" />
-              <span>{demoState ? `DEMO: ${demoState === 'caution' ? 'MODERATE' : demoState === 'danger' ? 'HIGH' : demoState === 'severe' ? 'EXTREME' : demoState.toUpperCase()}` : 'DEMO'}</span>
-              <ChevronDown size={10} className={`demo-chevron ${demoOpen ? 'open' : ''}`} />
-            </button>
-
-            {demoOpen && (
-              <div className="demo-dropdown-menu" role="menu">
-                <button
-                  type="button"
-                  className={`demo-opt ${!demoState ? 'selected' : ''}`}
-                  onClick={() => { setDemoState(null); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">⚡</span> Live (Exit Demo)
-                </button>
-                <button
-                  type="button"
-                  className={`demo-opt ${demoState === 'normal' ? 'selected' : ''}`}
-                  onClick={() => { setDemoState('normal'); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">🟢</span> Normal
-                </button>
-                <button
-                  type="button"
-                  className={`demo-opt ${demoState === 'caution' ? 'selected' : ''}`}
-                  onClick={() => { setDemoState('caution'); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">🟡</span> Moderate
-                </button>
-                <button
-                  type="button"
-                  className={`demo-opt ${demoState === 'danger' ? 'selected' : ''}`}
-                  onClick={() => { setDemoState('danger'); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">🟠</span> High
-                </button>
-                <button
-                  type="button"
-                  className={`demo-opt ${demoState === 'severe' ? 'selected' : ''}`}
-                  onClick={() => { setDemoState('severe'); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">🔴</span> Extreme
-                </button>
-                <button
-                  type="button"
-                  className={`demo-opt ${demoState === 'night' ? 'selected' : ''}`}
-                  onClick={() => { setDemoState('night'); setDemoOpen(false); }}
-                >
-                  <span className="demo-opt-dot">🌙</span> Night
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Small Contextual Celestial Indicator (Upper-Right) */}
-          <div className="celestial-badge" title={effectiveIsNight ? 'Night Time Mode' : 'Live Solar & Thermal Intensity'}>
-            {effectiveIsNight ? (
-              <svg className="celestial-moon-svg" viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true">
-                <path
-                  d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
-                  fill="#38bdf8"
-                  stroke="#7dd3fc"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="18" cy="5" r="1.2" fill="#bae6fd" className="star-twinkle" />
-                <circle cx="14" cy="2.5" r="0.9" fill="#bae6fd" className="star-twinkle-delay" />
-              </svg>
-            ) : (
-              <svg className="celestial-sun-svg" viewBox="-16 -16 32 32" width="30" height="30" aria-hidden="true">
-                <circle cx="0" cy="0" r="7" fill={effectiveCelestialColor} />
-                {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => (
-                  <line
-                    key={deg}
-                    x1="0"
-                    y1="-9"
-                    x2="0"
-                    y2="-13"
-                    stroke={effectiveCelestialColor}
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    transform={`rotate(${deg})`}
-                  />
-                ))}
-              </svg>
-            )}
-          </div>
-
-          {/* Full-Body Character Representation with Dynamic State */}
-          <div className={`character-wrapper state-${characterState}`}>
-            {/* Animated sleep Zzz effect for night state */}
-            {effectiveIsNight && (
-              <div className="sleep-z-container" aria-hidden="true">
-                <span className="sleep-z z-1">z</span>
-                <span className="sleep-z z-2">z</span>
-                <span className="sleep-z z-3">Z</span>
-              </div>
-            )}
-
-            {/* Animated sweat droplets for heat state */}
-            {isHeatState && (
-              <div className="sweat-drops-container" aria-hidden="true">
-                <span className="sweat-drop drop-1">💧</span>
-                <span className="sweat-drop drop-2">💧</span>
-              </div>
-            )}
-
-            {/* Responsive Picture with WebP and PNG Fallback */}
-            <picture className="character-picture">
-              <source srcSet={characterWebp} type="image/webp" />
-              <img
-                src={characterPng}
-                alt={characterAlt}
-                className={`telemetry-character-img anim-${characterState}`}
-                loading="eager"
+              <animate 
+                attributeName="r" 
+                values={`${dynamics.haloMinR};${dynamics.haloMaxR};${dynamics.haloMinR}`} 
+                dur={dynamics.durCorona} 
+                repeatCount="indefinite" 
               />
-            </picture>
+              <animate 
+                attributeName="opacity" 
+                values={`${dynamics.haloMinOp};${dynamics.haloMaxOp};${dynamics.haloMinOp}`} 
+                dur={dynamics.durCorona} 
+                repeatCount="indefinite" 
+              />
+            </circle>
 
-            {/* Soft Ground Shadow for realism */}
-            <div className="character-ground-shadow" aria-hidden="true" />
-          </div>
+            {/* Layer 2: Concentric Radiance Ring (centered at 0, 0) */}
+            <circle 
+              cx="0" 
+              cy="0" 
+              r="37" 
+              fill="none" 
+              stroke={dynamics.haloColor} 
+              strokeWidth="1.2" 
+              strokeOpacity="0.45" 
+              strokeDasharray="3 4"
+            >
+              <animate 
+                attributeName="stroke-opacity" 
+                values="0.30;0.55;0.30" 
+                dur={dynamics.durCorona} 
+                repeatCount="indefinite" 
+              />
+            </circle>
+
+            {/* Layer 3: Solar Rays (Slow continuous 360° rotation strictly centered around 0, 0) */}
+            <g>
+              <animateTransform 
+                attributeName="transform" 
+                type="rotate" 
+                from="0 0 0" 
+                to="360 0 0" 
+                dur={dynamics.durRays} 
+                repeatCount="indefinite" 
+              />
+              {rays.map(({ deg, isPrimary }, i) => (
+                <line
+                  key={i}
+                  x1="0"
+                  y1="-20"
+                  x2="0"
+                  y2={isPrimary ? dynamics.rayPrimaryLen : dynamics.raySecondaryLen}
+                  stroke={isPrimary ? dynamics.rayPrimary : dynamics.raySecondary}
+                  strokeWidth={isPrimary ? (dynamics.rayWidthPrimary || "2.4") : (dynamics.rayWidthSecondary || "1.6")}
+                  strokeLinecap="round"
+                  opacity={isPrimary ? dynamics.rayOpacityPrimary : dynamics.rayOpacitySecondary}
+                  transform={`rotate(${deg})`}
+                />
+              ))}
+            </g>
+
+            {/* Layer 4: Solar Core Disk (Centered at 0, 0 with subtle brightness breathing and crisp boundary) */}
+            <circle 
+              cx="0" 
+              cy="0" 
+              r="20" 
+              fill="url(#sunCoreGradient)"
+              stroke={dynamics.coreRim}
+              strokeWidth={dynamics.isNight ? "1.2" : "0.5"}
+              strokeOpacity={dynamics.isNight ? "0.95" : "0.6"}
+            >
+              <animate 
+                attributeName="opacity" 
+                values="0.94;1;0.94" 
+                dur={dynamics.durDisk} 
+                repeatCount="indefinite" 
+              />
+            </circle>
+
+            {/* Layer 5: Symmetrically Centered Heat Shimmer Lines */}
+            <g className="anim-heat-shimmer">
+              <path 
+                className="heat-wave-line wave-1"
+                d="M -36 40 Q -18 37, 0 40 T 36 40" 
+                fill="none" 
+                stroke="url(#heatHazeGrad)" 
+                strokeWidth="1.3" 
+                strokeLinecap="round"
+              />
+              <path 
+                className="heat-wave-line wave-2"
+                d="M -30 46 Q -15 49, 0 46 T 30 46" 
+                fill="none" 
+                stroke="url(#heatHazeGrad)" 
+                strokeWidth="1.4" 
+                strokeLinecap="round"
+                opacity="0.85"
+              />
+              <path 
+                className="heat-wave-line wave-3"
+                d="M -24 52 Q -12 50, 0 52 T 24 52" 
+                fill="none" 
+                stroke="url(#heatHazeGrad)" 
+                strokeWidth="1.2" 
+                strokeLinecap="round"
+                opacity="0.65"
+              />
+            </g>
+          </svg>
         </div>
       </div>
 
