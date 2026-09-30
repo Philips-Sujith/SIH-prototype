@@ -12,10 +12,10 @@ export default function Header({
   return (
     <header className="app-header">
       <div className="header-brand">
-        <img src={logoImg} alt="Climate India Logo" className="header-logo-img" />
+        <img src={logoImg} alt="CLIMATE GUARD Logo" className="header-logo-img" />
         <div className="brand-text">
           <div className="brand-title">
-            Climate India
+            CLIMATE GUARD
           </div>
           <span className="brand-subtitle">
             District Thermal Risk Early Warning • South India (TN, KL, KA)
