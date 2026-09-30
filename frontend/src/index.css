@@ -217,31 +217,16 @@ html, body {
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-}
-
-.logo-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  background: var(--bg-card-subtle);
-  border: 1px solid var(--border-card);
-  color: var(--accent-primary);
-  overflow: hidden;
-  flex-shrink: 0;
-  box-sizing: border-box;
+  gap: 12px;
 }
 
 .header-logo-img {
-  width: 100%;
-  height: 100%;
+  width: 42px;
+  height: 42px;
   object-fit: contain;
-  padding: 2.5px;
-  image-rendering: -webkit-optimize-contrast;
+  flex-shrink: 0;
   display: block;
+  image-rendering: -webkit-optimize-contrast;
 }
 
 .brand-text {

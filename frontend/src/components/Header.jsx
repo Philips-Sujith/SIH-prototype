@@ -12,9 +12,7 @@ export default function Header({
   return (
     <header className="app-header">
       <div className="header-brand">
-        <div className="logo-badge">
-          <img src={logoImg} alt="Climate India Logo" className="header-logo-img" />
-        </div>
+        <img src={logoImg} alt="Climate India Logo" className="header-logo-img" />
         <div className="brand-text">
           <div className="brand-title">
             Climate India
